@@ -400,12 +400,12 @@ const attachTipoReceitaToMovimento = async (movimentoContaId, tipoReceitaIds) =>
   await Promise.all(promises);
 };
 
-const createMovimentoConta = async ({ fornecedorId, faturadoId, numeroNotaFiscal, dataEmissao, dataVencimento, valorTotal, tipo, tipoDespesaId }) => {
+const createMovimentoConta = async ({ fornecedorId, faturadoId, numeroNotaFiscal, dataEmissao, dataVencimento, valorTotal, tipo, tipoDespesaId, descricaoProdutos }) => {
   const [result] = await db.query(
     `INSERT INTO movimentocontas
-      (fornecedor_id, faturado_id, numero_nota_fiscal, data_emissao, data_vencimento, valor_total, tipo_despesa_id, tipo, status_pagamento)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [fornecedorId, faturadoId, numeroNotaFiscal || null, dataEmissao, dataVencimento, valorTotal, tipoDespesaId || null, tipo, 'PENDENTE']
+      (fornecedor_id, faturado_id, numero_nota_fiscal, data_emissao, data_vencimento, valor_total, tipo_despesa_id, tipo, status_pagamento, descricao_produtos)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [fornecedorId, faturadoId, numeroNotaFiscal || null, dataEmissao, dataVencimento, valorTotal, tipoDespesaId || null, tipo, 'PENDENTE', descricaoProdutos || null]
   );
   return result.insertId;
 };
@@ -658,6 +658,7 @@ const normalizeParsedData = (parsedJson, pdfText) => {
   const classificacoesDespesa = normalizeClassificationList(parsedJson.classificacoesDespesa || parsedJson.classificacoes || parsedJson.tipoDespesa || parsedJson.classificacaoDespesa || classificacao);
   const classificacoesReceita = normalizeClassificationList(parsedJson.classificacoesReceita || parsedJson.tipoReceita || parsedJson.classificacaoReceita);
   const rawParcelas = parsedJson.parcelas || parsedJson.parcelasDetalhadas || parsedJson.parcels;
+  const descricaoProdutos = normalizeText(parsedJson.descricaoProdutos || parsedJson.descricao_produtos || parsedJson.produtos || '');
 
   const fornecedorCnpj = fornecedorData.cnpj || fornecedorData.CNPJ || findCnpjInParsedJson(parsedJson);
   const faturadoDocumento =
@@ -710,6 +711,7 @@ const normalizeParsedData = (parsedJson, pdfText) => {
     dataVencimento,
     valorTotal,
     quantidadeParcelas,
+    descricaoProdutos,
     rawParcelas
   };
 };
@@ -751,7 +753,8 @@ const checkPdfDataInDatabase = async (parsedJson, pdfText) => {
     dataEmissao,
     dataVencimento,
     valorTotal,
-    quantidadeParcelas
+    quantidadeParcelas,
+    descricaoProdutos
   } = normalizeParsedData(parsedJson, pdfText);
 
   const cleanCnpj = String(fornecedorData.cnpj || fornecedorData.CNPJ || '').replace(/\D/g, '');
@@ -796,7 +799,8 @@ const checkPdfDataInDatabase = async (parsedJson, pdfText) => {
       dataEmissao,
       dataVencimento,
       valorTotal,
-      quantidadeParcelas
+      quantidadeParcelas,
+      descricaoProdutos
     },
     database: {
       fornecedor: fornecedorRow
@@ -846,6 +850,7 @@ const savePdfDataToDatabase = async (parsedJson) => {
   const quantidadeParcelas = normalizeInt(parsedJson.quantidadeParcelas || parsedJson.parcelas?.length || parsedJson.parcelas || 1);
   const rawParcelas = parsedJson.parcelas || parsedJson.parcelasDetalhadas || parsedJson.parcels;
   const parcelasDetalhadas = normalizeParcelDetails(rawParcelas, quantidadeParcelas, valorTotal, dataVencimento);
+  const descricaoProdutos = normalizeText(parsedJson.descricaoProdutos || parsedJson.descricao_produtos || parsedJson.produtos || '');
 
   const fornecedor = await findOrCreateFornecedor({
     razaoSocial: fornecedorData.razaoSocial || fornecedorData.razao_social || fornecedorData.nome || '',
@@ -887,7 +892,8 @@ const savePdfDataToDatabase = async (parsedJson) => {
     dataVencimento,
     valorTotal,
     tipo,
-    tipoDespesaId
+    tipoDespesaId,
+    descricaoProdutos
   });
 
   if (tipo === 'ARECEBER') {

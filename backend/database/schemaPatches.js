@@ -20,7 +20,8 @@ const runSchemaPatches = async () => {
 
   const alters = [
     "ALTER TABLE parcelacontas ADD COLUMN identificacao ENUM('UNICA','PARCELADA') NOT NULL DEFAULT 'UNICA'",
-    'ALTER TABLE contas_pagar ADD COLUMN movimento_contas_id INT NULL'
+    'ALTER TABLE contas_pagar ADD COLUMN movimento_contas_id INT NULL',
+    'ALTER TABLE movimentocontas ADD COLUMN descricao_produtos LONGTEXT'
   ];
 
   for (const sql of alters) {
