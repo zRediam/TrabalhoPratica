@@ -94,17 +94,43 @@ const extractTextValue = (pdfText, labels) => {
     return null;
   }
 
+  // Tenta encontrar com cada padrão de label
   for (const label of labels) {
-    const regex = new RegExp(`${label}\\s*[:\-]?\\s*([^\\n\\r]{3,200})`, 'i');
-    const match = regex.exec(pdfText);
+    // Padrão 1: Label seguido de dois-pontos ou hífen
+    let regex = new RegExp(`${label}\\s*[:\\-]?\\s*([^\\n\\r]{3,200})`, 'i');
+    let match = regex.exec(pdfText);
     if (match && match[1]) {
       const value = normalizeText(match[1]);
       if (value.length >= 3) {
+        console.log('[REGEX] Encontrou valor com padrão 1:', { label, value: value.substring(0, 50) });
+        return value;
+      }
+    }
+
+    // Padrão 2: Label no início da linha, valor na próxima
+    regex = new RegExp(`^\\s*${label}\\s*$[\\r\\n]+([^\\n\\r]{3,200})`, 'im');
+    match = regex.exec(pdfText);
+    if (match && match[1]) {
+      const value = normalizeText(match[1]);
+      if (value.length >= 3) {
+        console.log('[REGEX] Encontrou valor com padrão 2:', { label, value: value.substring(0, 50) });
+        return value;
+      }
+    }
+
+    // Padrão 3: Label com espaços, seguido de qualquer separador
+    regex = new RegExp(`${label}[\\s\\:\\-\\.]*([A-ZÁÀÃÉÍÓÔÕÚÇÑ0-9\\s\\.\\,\\-\\/]+)`, 'i');
+    match = regex.exec(pdfText);
+    if (match && match[1]) {
+      const value = normalizeText(match[1]).split(/[\\n\\r]/)[0];
+      if (value.length >= 3 && value.length < 200) {
+        console.log('[REGEX] Encontrou valor com padrão 3:', { label, value: value.substring(0, 50) });
         return value;
       }
     }
   }
 
+  console.log('[REGEX] Nenhum valor encontrado para labels:', labels);
   return null;
 };
 
@@ -118,16 +144,53 @@ const extractNameNearIdentifier = (pdfText, identifier) => {
     return null;
   }
 
-  const regex = new RegExp(`([A-ZÁÀÃÉÍÓÔÕÚÇ0-9\s\.\-\/\&]{10,200})\\s*${cleanIdentifier}`, 'g');
+  // Padrão 1: Texto antes do identificador (ex: "Razão Social 12345678901234")
+  let regex = new RegExp(`([A-ZÁÀÃÉÍÓÔÕÚÇ0-9\s\.\-\/\&]{10,200})\\s*${cleanIdentifier}`, 'g');
   let match;
   while ((match = regex.exec(pdfText)) !== null) {
     const candidate = normalizeText(match[1]);
     const lines = candidate.split(/[\r\n]+/).map((line) => normalizeText(line)).filter(Boolean);
     if (lines.length > 0) {
+      console.log('[REGEX-NAME] Encontrou nome com padrão 1 (antes de ID):', lines[lines.length - 1].substring(0, 50));
       return lines[lines.length - 1];
     }
   }
 
+  // Padrão 2: Identificador no início da linha, texto na mesma ou próxima linha
+  regex = new RegExp(`^\\s*${cleanIdentifier}\\s*[:\\-]?\\s*([A-ZÁÀÃÉÍÓÔÕÚÇ0-9\s\.\-\/\&]{10,200})$`, 'gim');
+  match = regex.exec(pdfText);
+  if (match && match[1]) {
+    const candidate = normalizeText(match[1]);
+    if (candidate.length >= 10 && candidate.length <= 200) {
+      console.log('[REGEX-NAME] Encontrou nome com padrão 2 (ID no início):', candidate.substring(0, 50));
+      return candidate;
+    }
+  }
+
+  // Padrão 3: Procurar em contexto próximo ao identificador (5 linhas antes/depois)
+  const lines = pdfText.split(/[\r\n]+/);
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes(cleanIdentifier)) {
+      // Tenta a linha anterior
+      if (i > 0) {
+        const candidate = normalizeText(lines[i - 1]);
+        if (candidate.length >= 10 && candidate.length <= 200 && /[A-ZÁÀÃÉÍÓÔÕÚÇ]/.test(candidate)) {
+          console.log('[REGEX-NAME] Encontrou nome com padrão 3 (linha anterior):', candidate.substring(0, 50));
+          return candidate;
+        }
+      }
+      // Tenta a próxima linha
+      if (i < lines.length - 1) {
+        const candidate = normalizeText(lines[i + 1]);
+        if (candidate.length >= 10 && candidate.length <= 200 && /[A-ZÁÀÃÉÍÓÔÕÚÇ]/.test(candidate)) {
+          console.log('[REGEX-NAME] Encontrou nome com padrão 3 (próxima linha):', candidate.substring(0, 50));
+          return candidate;
+        }
+      }
+    }
+  }
+
+  console.log('[REGEX-NAME] Nenhum nome encontrado perto do ID:', cleanIdentifier.substring(0, 5) + '***');
   return null;
 };
 
@@ -178,14 +241,28 @@ const foldKey = (value) =>
 const MAX_PROMPT_TEXT_CHARS = 48000;
 
 const buildPrompt = (pdfText) => {
-  const trimmedText =
-    pdfText && pdfText.length > MAX_PROMPT_TEXT_CHARS
-      ? `${pdfText.slice(0, MAX_PROMPT_TEXT_CHARS)}\n\n[Texto truncado por limite de tamanho; use apenas o trecho acima.]`
-      : pdfText;
+  const trimmedText = pdfText && pdfText.length > MAX_PROMPT_TEXT_CHARS
+    ? `${pdfText.slice(0, MAX_PROMPT_TEXT_CHARS)}\n\n[Texto truncado por limite de tamanho; use apenas o trecho acima.]`
+    : pdfText;
+
+  if (trimmedText.includes('[Texto truncado')) {
+    console.warn('[PROMPT] Texto truncado para limite de API', {
+      originalLength: pdfText.length,
+      trimmedLength: trimmedText.length,
+      maxChars: MAX_PROMPT_TEXT_CHARS
+    });
+  }
 
   return `
 Voce e um assistente especializado em processamento de Notas Fiscais (Contas a Pagar ou Receber).
 Com base no texto extraido abaixo, retorne SOMENTE um unico objeto JSON valido (RFC 8259), sem markdown, sem comentarios e sem texto fora do JSON.
+
+ATENCAO CRITICA:
+- Preencha TODOS os campos obrigatorios listados abaixo - NUNCA deixe vazio quando houver dados no documento
+- CNPJ deve ter exatamente 14 digitos (apenas numeros)
+- Documento (CPF/CNPJ) deve ter 11 ou 14 digitos (apenas numeros)
+- Endereco deve estar COMPLETO: rua, numero, bairro, cidade, estado, CEP - nao apenas CEP
+- Se o PDF nao tiver uma informacao, use "" (string vazia) ou null, mas mantenha a chave
 
 Texto da nota:
 ${trimmedText}
@@ -214,17 +291,17 @@ Regras importantes:
 - classificacoesReceita: preencha quando "tipo" for "ARECEBER".
 - parcelas: um objeto por parcela com "valor" e "dataVencimento" (YYYY-MM-DD). Se houver uma unica parcela, use quantidadeParcelas 1 e um unico item em parcelas.
 
-Campos obrigatorios:
-- fornecedor: razaoSocial, fantasia, cnpj
-- cliente: nomeOuRazaoSocial, documento (CPF ou CNPJ do destinatario), endereco
-  IMPORTANTE: Endereco deve ser COMPLETO incluindo rua, numero, complemento (se houver), bairro, cidade, estado, CEP.
-  Extraia TUDO que conseguir encontrar. Nao coloque apenas o CEP.
+Campos obrigatorios (NUNCA deixe em branco quando houver informacao no documento):
+- fornecedor: razaoSocial, fantasia, cnpj (14 digitos)
+- cliente: nomeOuRazaoSocial, documento (CPF 11 digitos ou CNPJ 14 digitos), endereco (COMPLETO)
+  IMPORTANTE: Endereco deve incluir: rua, numero, complemento (se houver), bairro, cidade, estado, CEP.
+  Extraia TUDO que conseguir encontrar. Nao coloque apenas o CEP ou apenas a cidade.
 - numeroNotaFiscal
-- dataEmissao
+- dataEmissao (YYYY-MM-DD)
 - descricaoProdutos (texto resumido ou lista)
 - quantidadeParcelas
-- dataVencimento (primeira parcela ou unica)
-- valorTotal
+- dataVencimento (primeira parcela ou unica) (YYYY-MM-DD)
+- valorTotal (numero)
 - parcelas: array de objetos {"valor": number, "dataVencimento": "YYYY-MM-DD"}
 
 Se algum campo nao existir no PDF, devolva string vazia ou array vazio, mas mantenha a estrutura.
@@ -240,8 +317,9 @@ Classificacoes permitidas (use exatamente um destes textos ou o mais proximo pos
 - IMPOSTOS E TAXAS
 - INVESTIMENTOS
 
-ATENCAO: Se o endereco estiver dividido em multiplas linhas no PDF, junte tudo em um texto unico.
+ATENCAO: Se o endereco estiver dividido em multiplas linhas no PDF, junte tudo em um texto unico separado por espacos ou virgulas.
 `;
+};
 };
 
 const findOrCreateFornecedor = async ({ razaoSocial, fantasia, cnpj }) => {
@@ -661,14 +739,14 @@ const normalizeParsedData = (parsedJson, pdfText) => {
   const descricaoProdutos = normalizeText(parsedJson.descricaoProdutos || parsedJson.descricao_produtos || parsedJson.produtos || '');
 
   const fornecedorCnpj = fornecedorData.cnpj || fornecedorData.CNPJ || findCnpjInParsedJson(parsedJson);
-  const faturadoDocumento =
-    faturadoData.documento || faturadoData.cpf || faturadoData.cnpj || findDocumentoInFaturadoSubtree(parsedJson);
+  const faturadoDocumento = faturadoData.documento || faturadoData.cpf || faturadoData.cnpj || findDocumentoInFaturadoSubtree(parsedJson);
 
   const normalizedFornecedorName = normalizeText(fornecedorData.razaoSocial || fornecedorData.razao_social || fornecedorData.nome || fornecedorData.nomeFantasia || fornecedorData.fantasia);
   const normalizedFantasia = normalizeText(fornecedorData.fantasia || fornecedorData.nomeFantasia || fornecedorData.fantasia || fornecedorData.razaoSocial);
   const normalizedFaturadoName = normalizeText(faturadoData.nome || faturadoData.nomeOuRazaoSocial || faturadoData.razaoSocial || faturadoData.nome_fantasia || faturadoData.razaoSocial);
   const normalizedFaturadoAddress = normalizeText(faturadoData.endereco || faturadoData.address || '');
 
+  // Se a IA não encontrou o nome, tenta extrair via regex
   const extractedFornecedorName = !normalizedFornecedorName && fornecedorCnpj
     ? extractNameNearIdentifier(pdfText, fornecedorCnpj) || extractTextValue(pdfText, ['Raz[aã]o Social', 'Nome\/Raz[aã]o Social', 'Emitente', 'Fornecedor'])
     : null;
@@ -678,11 +756,25 @@ const normalizeParsedData = (parsedJson, pdfText) => {
     : null;
 
   const extractedFaturadoAddress = !normalizedFaturadoAddress
-    ? extractTextValue(pdfText, ['Endere[cç]o', 'Rua', 'Av\.', 'Avenida', 'Logradouro'])
+    ? extractTextValue(pdfText, ['Endere[cç]o', 'Rua', 'Av\.', 'Avenida', 'Logradouro', 'Endereco'])
     : null;
 
   const resolvedNome = normalizedFaturadoName || extractedFaturadoName || '';
   const resolvedEndereco = normalizedFaturadoAddress || extractedFaturadoAddress || '';
+
+  console.log('[NORMALIZE] Dados normalizados:', {
+    cnpjFromIA: !!fornecedorData.cnpj,
+    cnpjFinal: fornecedorCnpj?.substring(0, 5) + '***',
+    nomeFromIA: !!normalizedFornecedorName,
+    nomeExtraido: !!extractedFornecedorName,
+    nomeFromRegex: !!extractedFaturadoName,
+    enderecoFromIA: !!normalizedFaturadoAddress,
+    enderecoExtraido: !!extractedFaturadoAddress,
+    tipo,
+    dataEmissao,
+    dataVencimento,
+    valorTotal
+  });
 
   return {
     fornecedorData: {
@@ -760,9 +852,23 @@ const checkPdfDataInDatabase = async (parsedJson, pdfText) => {
   const cleanCnpj = String(fornecedorData.cnpj || fornecedorData.CNPJ || '').replace(/\D/g, '');
   const cleanDoc = String(faturadoData.documento || faturadoData.cpf || faturadoData.cnpj || '').replace(/\D/g, '');
 
+  console.log('[DATABASE] Buscando dados no banco:', {
+    cnpjLimpo: cleanCnpj.substring(0, 5) + '***',
+    docLimpo: cleanDoc.substring(0, 5) + '***',
+    nomeCliente: clienteData.nome?.substring(0, 30),
+    tipo,
+    valorTotal
+  });
+
   const fornecedorRow = await findFornecedorByCnpj(cleanCnpj);
   const faturadoRow = await findFaturadoByDocumento(cleanDoc);
   const clienteRow = await findClienteByDocumento(cleanDoc);
+
+  console.log('[DATABASE] Resultados da busca:', {
+    fornecedorExiste: !!fornecedorRow,
+    faturadoExiste: !!faturadoRow,
+    clienteExiste: !!clienteRow
+  });
 
   const classificationRows = tipo === 'ARECEBER'
     ? await Promise.all(classificacoesReceita.map(getTipoReceitaByDescricao))
@@ -773,6 +879,11 @@ const checkPdfDataInDatabase = async (parsedJson, pdfText) => {
     return row
       ? { id: row.id, exists: true, descricao: row.descricao }
       : { id: null, exists: false, descricao };
+  });
+
+  console.log('[DATABASE] Classificações encontradas:', {
+    count: classifications.length,
+    descricoes: classifications.map(c => c.descricao).join(', ')
   });
 
   return {
@@ -1086,10 +1197,28 @@ const extractPdfText = async (buffer) => {
   try {
     const parsed = await parser.getText();
     const text = parsed?.text?.trim();
-    if (!text) {
-      throw new Error('Nao foi possivel extrair texto do PDF. Verifique se o arquivo nao esta corrompido.');
+    
+    if (!text || text.length === 0) {
+      throw new Error('Nao foi possivel extrair texto do PDF. Verifique se o arquivo nao esta corrompido ou se e um PDF baseado em imagem (sem OCR).');
     }
+
+    // Validar se há conteúdo mínimo
+    const lines = text.split('\n').filter(line => line.trim().length > 0);
+    if (lines.length < 3) {
+      console.warn('[PDF] Aviso: PDF tem muito pouco conteúdo extraído', { linesCount: lines.length, textLength: text.length });
+    }
+
+    console.log('[PDF] Extração bem-sucedida:', { 
+      textLength: text.length, 
+      linesCount: lines.length,
+      firstLine: lines[0]?.substring(0, 50),
+      lastLine: lines[lines.length - 1]?.substring(0, 50)
+    });
+
     return text;
+  } catch (error) {
+    console.error('[PDF] Erro ao extrair texto:', error.message);
+    throw new Error(`Falha ao extrair texto do PDF: ${error.message}`);
   } finally {
     await parser.destroy();
   }
@@ -1240,28 +1369,85 @@ const extractDataFromPdf = async (req, res) => {
       return res.status(400).json({ error: 'Nenhum arquivo PDF enviado.' });
     }
 
+    console.log('[EXTRACT] Iniciando extração de PDF:', { 
+      fileName: req.file.originalname, 
+      fileSize: req.file.size,
+      mimetype: req.file.mimetype
+    });
+
+    // Etapa 1: Extrair texto do PDF
     const pdfText = await extractPdfText(req.file.buffer);
+    console.log('[EXTRACT] Etapa 1 concluída: Extração de texto');
+
+    // Etapa 2: Validar se há conteúdo mínimo
+    const wordCount = pdfText.split(/\s+/).length;
+    if (wordCount < 10) {
+      console.warn('[EXTRACT] Aviso: PDF tem muito pouco conteúdo', { wordCount });
+    }
+
+    // Etapa 3: Construir e enviar prompt para IA
     const promptText = buildPrompt(pdfText);
+    console.log('[EXTRACT] Etapa 2 concluída: Prompt construído, enviando para IA');
 
     const resultText = await invokeLlmWithFallback(promptText, 'extracao-pdf');
+    console.log('[EXTRACT] Etapa 3 concluída: Resposta recebida da IA', {
+      responseLength: resultText.length,
+      hasJson: resultText.includes('{') && resultText.includes('}')
+    });
 
+    // Etapa 4: Parsear JSON
     let parsedJson;
     try {
       parsedJson = parseModelJson(resultText);
+      console.log('[EXTRACT] Etapa 4 concluída: JSON parseado com sucesso');
     } catch (firstParseError) {
+      console.warn('[EXTRACT] Primeira tentativa de parse falhou, tentando reparar JSON');
       const candidate = extractJsonCandidate(resultText);
       const repairedText = await repairJsonWithProvider(candidate, getProvider());
       parsedJson = parseModelJson(repairedText);
+      console.log('[EXTRACT] Etapa 4 concluída: JSON reparado e parseado');
     }
 
+    // Etapa 5: Validar campos críticos na resposta da IA
+    const cnpj = String(parsedJson?.fornecedor?.cnpj || '').replace(/\D/g, '');
+    const doc = String(parsedJson?.cliente?.documento || parsedJson?.faturado?.documento || '').replace(/\D/g, '');
+    const valorTotal = normalizeNumber(parsedJson?.valorTotal || 0);
+    
+    console.log('[EXTRACT] Validação de campos da IA:', {
+      cnpjPresente: cnpj.length === 14,
+      cnpjLength: cnpj.length,
+      docPresente: doc.length === 11 || doc.length === 14,
+      docLength: doc.length,
+      valorTotal,
+      tipo: parsedJson?.tipo,
+      dataEmissao: parsedJson?.dataEmissao,
+      dataVencimento: parsedJson?.dataVencimento,
+      endereco: parsedJson?.cliente?.endereco || parsedJson?.faturado?.endereco
+    });
+
+    // Etapa 6: Comparar com banco de dados
+    console.log('[EXTRACT] Etapa 5 concluída: Iniciando verificação no banco de dados');
     const databaseResult = await checkPdfDataInDatabase(parsedJson, pdfText);
+    
+    console.log('[EXTRACT] Extração finalizada com sucesso', {
+      fornecedorExiste: databaseResult.database?.fornecedor?.exists,
+      faturadoExiste: databaseResult.database?.faturado?.exists,
+      clienteExiste: databaseResult.database?.cliente?.exists
+    });
+
     res.json(databaseResult);
   } catch (error) {
-    console.error('Erro na extração de dados:', error);
+    console.error('[EXTRACT] Erro durante extração:', {
+      errorMessage: error?.message,
+      errorProvider: error?.provider,
+      errorStatus: error?.status,
+      stack: error?.stack
+    });
 
     if (error.provider) {
       const providerName = error.provider === 'gemini' ? 'Gemini' : 'OpenRouter';
       const providerError = sanitizeProviderError(providerName, error?.status, error?.message);
+      console.error('[EXTRACT] Erro do provedor:', providerError);
       return res.status(providerError.status).json({
         error: providerError.error,
         details: providerError.details
@@ -1280,21 +1466,49 @@ const validateParsedDataForSave = (parsedData) => {
   const fornecedor = parsedData?.fornecedor || {};
   const faturado = parsedData?.faturado || {};
   const cliente = parsedData?.cliente || {};
+  
   const cnpj = String(fornecedor.cnpj || '').replace(/\D/g, '');
   if (cnpj.length !== 14) {
-    errors.push('CNPJ do fornecedor invalido ou incompleto (14 digitos).');
+    errors.push(`CNPJ do fornecedor inválido: esperado 14 dígitos, recebido ${cnpj.length}. Valor: "${fornecedor.cnpj}"`);
   }
+  
+  const razaoSocial = normalizeText(fornecedor.razaoSocial || fornecedor.razao_social || '');
+  if (!razaoSocial || razaoSocial.length < 5) {
+    errors.push(`Razão social do fornecedor inválida ou muito curta: "${razaoSocial}"`);
+  }
+
   const doc = String(faturado.documento || cliente.documento || '').replace(/\D/g, '');
   if (!(doc.length === 11 || doc.length === 14)) {
-    errors.push('CPF ou CNPJ do destinatario (cliente/faturado) invalido ou ausente.');
+    errors.push(`CPF/CNPJ do destinatário inválido: esperado 11 ou 14 dígitos, recebido ${doc.length}. Valor: "${faturado.documento || cliente.documento}"`);
   }
+
+  const nomeCliente = normalizeText(faturado.nome || cliente.nome || '');
+  if (!nomeCliente || nomeCliente.length < 5) {
+    errors.push(`Nome do cliente/faturado inválido ou muito curto: "${nomeCliente}"`);
+  }
+
+  const endereco = normalizeText(faturado.endereco || cliente.endereco || '');
+  if (!endereco || endereco.length < 10) {
+    errors.push(`Endereço do cliente incompleto (mínimo 10 caracteres): "${endereco}"`);
+  }
+
   const valorTotal = normalizeNumber(parsedData?.valorTotal);
   if (valorTotal <= 0) {
-    errors.push('Valor total deve ser maior que zero.');
+    errors.push(`Valor total deve ser maior que zero: ${valorTotal}`);
   }
+
   if (!toSqlDate(parsedData?.dataEmissao)) {
-    errors.push('Data de emissao invalida ou ausente.');
+    errors.push(`Data de emissão inválida: "${parsedData?.dataEmissao}"`);
   }
+
+  if (!toSqlDate(parsedData?.dataVencimento)) {
+    errors.push(`Data de vencimento inválida: "${parsedData?.dataVencimento}"`);
+  }
+
+  if (errors.length > 0) {
+    console.error('[VALIDATION] Erros de validação encontrados:', errors);
+  }
+
   return { ok: errors.length === 0, errors };
 };
 
