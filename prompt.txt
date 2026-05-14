@@ -1,0 +1,94 @@
+Quero que você desenvolva um sistema web completo para gestão de uma biblioteca pessoal/comunitária.
+
+O sistema deve permitir catalogar livros e controlar empréstimos, garantindo que seja possível saber onde cada livro está e o histórico de leitores.
+
+1. Funcionalidades obrigatórias
+
+1.1 Gestão de Livros
+Cadastro com: Título, Autor, ISBN, Gênero, Ano de publicação
+Status: Disponível, Emprestado, Danificado
+Permitir imagem da capa (upload ou URL)
+
+1.2 Gestão de Usuários
+Cadastro com: Nome, E-mail, Telefone
+
+1.3 Controle de Empréstimos
+Registrar data de saída
+Registrar data prevista de devolução
+Identificar atrasos
+Histórico de empréstimos por livro
+
+2. Interface (UI/UX)
+
+Dashboard com total de livros, emprestados e atrasados
+Busca por título e autor
+Filtros por status e categoria
+Interface responsiva (PC e celular)
+Cores: verde para disponível e vermelho para emprestado
+
+3. Regras de Negócio
+
+Não permitir emprestar livro já emprestado
+Não permitir excluir usuário com livro em posse
+
+4. Stack obrigatória
+
+Frontend: Vue.js com Tailwind CSS
+Backend: Python com FastAPI
+Banco de dados: SQLite
+
+5. FORMATO DE ENTREGA
+
+Você deve organizar a resposta exatamente nas 3 seções abaixo, com os títulos escritos exatamente assim:
+
+5.1 Documento de planejamento
+
+Crie um documento contendo:
+
+Descrição do sistema
+Objetivo geral
+Público-alvo
+Funcionalidades principais
+Requisitos funcionais
+Requisitos não funcionais
+Regras de negócio
+Tecnologias utilizadas
+Estrutura do sistema
+
+Use linguagem simples, como um estudante escreveria.
+
+5.2 Documento da API
+
+Documente a API com:
+
+Lista de endpoints
+Métodos HTTP (GET, POST, PUT, DELETE)
+Rotas
+Parâmetros
+Exemplo de requisição
+Exemplo de resposta
+
+Separar por:
+
+Livros
+Usuários
+Empréstimos
+
+5.3 Código
+
+Entregue o código completo separado em:
+
+Backend (FastAPI)
+Estrutura de pastas
+Models
+Schemas
+Rotas
+Banco SQLite
+Regras de negócio implementadas
+
+Frontend (Vue.js + Tailwind CSS)
+Estrutura de pastas
+Componentes
+Páginas principais
+Dashboard
+CRUD de livros, usuários e empréstimos
