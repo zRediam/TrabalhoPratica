@@ -6,58 +6,30 @@ const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-oss-20b:free';
 const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
 
 const getProvider = () => {
-  const explicitProvider = process.env.AI_PROVIDER?.toLowerCase();
-  if (explicitProvider) {
-    return explicitProvider;
-  }
-  return process.env.OPENROUTER_API_KEY ? 'openrouter' : 'gemini';
+  console.log('[PROVIDER] OpenRouter only');
+  return 'openrouter';
 };
 
-const hasOpenRouter = () => Boolean(String(process.env.OPENROUTER_API_KEY || '').trim());
-const hasGemini = () => Boolean(String(process.env.GEMINI_API_KEY || '').trim());
+const hasOpenRouter = () => {
+  const hasKey = Boolean(String(process.env.OPENROUTER_API_KEY || '').trim());
+  if (!hasKey) console.error('[PROVIDER] Key not set');
+  return hasKey;
+};
 
-/**
- * Chama o provedor preferido (AI_PROVIDER ou heuristica) e, se falhar com cota/429 ou erro do Gemini,
- * tenta o outro provedor quando a respectiva chave existir (OpenRouter costuma ter modelos free).
- */
+const hasGemini = () => false; // disabled
+
 const invokeLlmWithFallback = async (promptText, contextLabel = 'extracao') => {
-  const primary = getProvider();
-  const runGemini = () => generateWithGemini(promptText);
-  const runOpenRouter = () => generateWithOpenRouter(promptText);
-  const tryPrimary = primary === 'gemini' ? runGemini : runOpenRouter;
-  const trySecondary = primary === 'gemini' ? runOpenRouter : runGemini;
-  const secondaryLabel = primary === 'gemini' ? 'OpenRouter' : 'Gemini';
+  console.log(`[LLM-${contextLabel}] Using OpenRouter`);
+  
+  if (!hasOpenRouter()) throw new Error('OPENROUTER_API_KEY missing');
 
   try {
-    return await tryPrimary();
-  } catch (primaryError) {
-    const canUseGemini = hasGemini();
-    const canUseOpenRouter = hasOpenRouter();
-    const secondaryAvailable = primary === 'gemini' ? canUseOpenRouter : canUseGemini;
-
-    if (!secondaryAvailable) {
-      throw primaryError;
-    }
-
-    let shouldFallback = primary === 'openrouter' && primaryError?.provider === 'openrouter';
-
-    if (primary === 'gemini') {
-      const msg = String(primaryError?.message || primaryError?.cause || primaryError || '');
-      const status = primaryError?.status ?? primaryError?.statusCode;
-      shouldFallback =
-        primaryError?.provider === 'gemini' ||
-        status === 429 ||
-        /RESOURCE_EXHAUSTED|quota|rate limit|free_tier|exceeded your current quota|limite/i.test(msg);
-    }
-
-    if (!shouldFallback) {
-      throw primaryError;
-    }
-
-    console.warn(
-      `[${contextLabel}] Provedor ${primary} falhou: ${primaryError?.message || primaryError}. Tentando ${secondaryLabel} (alternativa).`
-    );
-    return await trySecondary();
+    const response = await generateWithOpenRouter(promptText);
+    console.log(`[LLM-${contextLabel}] OK`);
+    return response;
+  } catch (error) {
+    console.error(`[LLM-${contextLabel}] Error:`, error.message);
+    throw error;
   }
 };
 
@@ -90,107 +62,73 @@ const normalizeText = (value) => {
 };
 
 const extractTextValue = (pdfText, labels) => {
-  if (!pdfText) {
-    return null;
-  }
+  if (!pdfText) return null;
 
-  // Tenta encontrar com cada padrão de label
   for (const label of labels) {
-    // Padrão 1: Label seguido de dois-pontos ou hífen
+    // Pattern 1: label: value
     let regex = new RegExp(`${label}\\s*[:\\-]?\\s*([^\\n\\r]{3,200})`, 'i');
     let match = regex.exec(pdfText);
     if (match && match[1]) {
       const value = normalizeText(match[1]);
-      if (value.length >= 3) {
-        console.log('[REGEX] Encontrou valor com padrão 1:', { label, value: value.substring(0, 50) });
-        return value;
-      }
+      if (value.length >= 3) return value;
     }
 
-    // Padrão 2: Label no início da linha, valor na próxima
+    // Pattern 2: label on line, value below
     regex = new RegExp(`^\\s*${label}\\s*$[\\r\\n]+([^\\n\\r]{3,200})`, 'im');
     match = regex.exec(pdfText);
     if (match && match[1]) {
       const value = normalizeText(match[1]);
-      if (value.length >= 3) {
-        console.log('[REGEX] Encontrou valor com padrão 2:', { label, value: value.substring(0, 50) });
-        return value;
-      }
+      if (value.length >= 3) return value;
     }
 
-    // Padrão 3: Label com espaços, seguido de qualquer separador
+    // Pattern 3: label with spaces
     regex = new RegExp(`${label}[\\s\\:\\-\\.]*([A-ZÁÀÃÉÍÓÔÕÚÇÑ0-9\\s\\.\\,\\-\\/]+)`, 'i');
     match = regex.exec(pdfText);
     if (match && match[1]) {
-      const value = normalizeText(match[1]).split(/[\\n\\r]/)[0];
-      if (value.length >= 3 && value.length < 200) {
-        console.log('[REGEX] Encontrou valor com padrão 3:', { label, value: value.substring(0, 50) });
-        return value;
-      }
+      const value = normalizeText(match[1]).split(/[\n\r]/)[0];
+      if (value.length >= 3 && value.length < 200) return value;
     }
   }
-
-  console.log('[REGEX] Nenhum valor encontrado para labels:', labels);
   return null;
 };
 
 const extractNameNearIdentifier = (pdfText, identifier) => {
-  if (!pdfText || !identifier) {
-    return null;
-  }
+  if (!pdfText || !identifier) return null;
 
   const cleanIdentifier = String(identifier).replace(/\D/g, '');
-  if (!cleanIdentifier) {
-    return null;
-  }
+  if (!cleanIdentifier) return null;
 
-  // Padrão 1: Texto antes do identificador (ex: "Razão Social 12345678901234")
+  // Pattern 1: text before ID
   let regex = new RegExp(`([A-ZÁÀÃÉÍÓÔÕÚÇ0-9\s\.\-\/\&]{10,200})\\s*${cleanIdentifier}`, 'g');
   let match;
   while ((match = regex.exec(pdfText)) !== null) {
     const candidate = normalizeText(match[1]);
     const lines = candidate.split(/[\r\n]+/).map((line) => normalizeText(line)).filter(Boolean);
-    if (lines.length > 0) {
-      console.log('[REGEX-NAME] Encontrou nome com padrão 1 (antes de ID):', lines[lines.length - 1].substring(0, 50));
-      return lines[lines.length - 1];
-    }
+    if (lines.length > 0) return lines[lines.length - 1];
   }
 
-  // Padrão 2: Identificador no início da linha, texto na mesma ou próxima linha
+  // Pattern 2: ID at line start, text after
   regex = new RegExp(`^\\s*${cleanIdentifier}\\s*[:\\-]?\\s*([A-ZÁÀÃÉÍÓÔÕÚÇ0-9\s\.\-\/\&]{10,200})$`, 'gim');
   match = regex.exec(pdfText);
   if (match && match[1]) {
     const candidate = normalizeText(match[1]);
-    if (candidate.length >= 10 && candidate.length <= 200) {
-      console.log('[REGEX-NAME] Encontrou nome com padrão 2 (ID no início):', candidate.substring(0, 50));
-      return candidate;
-    }
+    if (candidate.length >= 10 && candidate.length <= 200) return candidate;
   }
 
-  // Padrão 3: Procurar em contexto próximo ao identificador (5 linhas antes/depois)
+  // Pattern 3: check lines before/after ID
   const lines = pdfText.split(/[\r\n]+/);
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].includes(cleanIdentifier)) {
-      // Tenta a linha anterior
       if (i > 0) {
         const candidate = normalizeText(lines[i - 1]);
-        if (candidate.length >= 10 && candidate.length <= 200 && /[A-ZÁÀÃÉÍÓÔÕÚÇ]/.test(candidate)) {
-          console.log('[REGEX-NAME] Encontrou nome com padrão 3 (linha anterior):', candidate.substring(0, 50));
-          return candidate;
-        }
+        if (candidate.length >= 10 && candidate.length <= 200 && /[A-ZÁÀÃÉÍÓÔÕÚÇ]/.test(candidate)) return candidate;
       }
-      // Tenta a próxima linha
       if (i < lines.length - 1) {
         const candidate = normalizeText(lines[i + 1]);
-        if (candidate.length >= 10 && candidate.length <= 200 && /[A-ZÁÀÃÉÍÓÔÕÚÇ]/.test(candidate)) {
-          console.log('[REGEX-NAME] Encontrou nome com padrão 3 (próxima linha):', candidate.substring(0, 50));
-          return candidate;
-        }
+        if (candidate.length >= 10 && candidate.length <= 200 && /[A-ZÁÀÃÉÍÓÔÕÚÇ]/.test(candidate)) return candidate;
       }
     }
   }
-
-  console.log('[REGEX-NAME] Nenhum nome encontrado perto do ID:', cleanIdentifier.substring(0, 5) + '***');
   return null;
 };
 
@@ -242,32 +180,22 @@ const MAX_PROMPT_TEXT_CHARS = 48000;
 
 const buildPrompt = (pdfText) => {
   const trimmedText = pdfText && pdfText.length > MAX_PROMPT_TEXT_CHARS
-    ? `${pdfText.slice(0, MAX_PROMPT_TEXT_CHARS)}\n\n[Texto truncado por limite de tamanho; use apenas o trecho acima.]`
+    ? `${pdfText.slice(0, MAX_PROMPT_TEXT_CHARS)}\n\n[Text truncated]`
     : pdfText;
 
-  if (trimmedText.includes('[Texto truncado')) {
-    console.warn('[PROMPT] Texto truncado para limite de API', {
-      originalLength: pdfText.length,
-      trimmedLength: trimmedText.length,
-      maxChars: MAX_PROMPT_TEXT_CHARS
-    });
-  }
+  return `Extract data from invoice PDF. Return ONLY valid JSON (RFC 8259), no markdown.
 
-  return `
-Voce e um assistente especializado em processamento de Notas Fiscais (Contas a Pagar ou Receber).
-Com base no texto extraido abaixo, retorne SOMENTE um unico objeto JSON valido (RFC 8259), sem markdown, sem comentarios e sem texto fora do JSON.
+CRITICAL:
+- Fill ALL required fields when data exists in document
+- CNPJ: exactly 14 digits (numbers only)
+- Document (CPF/CNPJ): 11 or 14 digits
+- Address: complete (street, number, neighborhood, city, state, zip)
+- For missing fields, use "" or [], keep the key
 
-ATENCAO CRITICA:
-- Preencha TODOS os campos obrigatorios listados abaixo - NUNCA deixe vazio quando houver dados no documento
-- CNPJ deve ter exatamente 14 digitos (apenas numeros)
-- Documento (CPF/CNPJ) deve ter 11 ou 14 digitos (apenas numeros)
-- Endereco deve estar COMPLETO: rua, numero, bairro, cidade, estado, CEP - nao apenas CEP
-- Se o PDF nao tiver uma informacao, use "" (string vazia) ou null, mas mantenha a chave
-
-Texto da nota:
+PDF text:
 ${trimmedText}
 
-Estrutura exata desejada (exemplo valido — copie as chaves; substitua valores; use null apenas onde indicado):
+Return this structure:
 {
   "fornecedor": { "razaoSocial": "", "fantasia": "", "cnpj": "" },
   "cliente": { "nomeOuRazaoSocial": "", "documento": "", "endereco": "" },
@@ -283,30 +211,22 @@ Estrutura exata desejada (exemplo valido — copie as chaves; substitua valores;
   "parcelas": []
 }
 
-Regras importantes:
-- fornecedor = EMITENTE / PRESTADOR / quem emite a nota (CNPJ de 14 digitos quando houver).
-- cliente = DESTINATARIO / TOMADOR / FATURADO (quem recebe a mercadoria ou servico). Nunca copie o mesmo CNPJ do emitente para o cliente, salvo se a nota indicar explicitamente que sao a mesma pessoa.
-- Preencha "tipo" com "APAGAR" para contas a pagar (nota de compra/despesa) ou "ARECEBER" para contas a receber (nota de venda/receita), conforme o contexto do documento.
-- classificacoesDespesa: preencha quando "tipo" for "APAGAR" (pode inferir a partir de natureza da operacao, produtos ou observacoes).
-- classificacoesReceita: preencha quando "tipo" for "ARECEBER".
-- parcelas: um objeto por parcela com "valor" e "dataVencimento" (YYYY-MM-DD). Se houver uma unica parcela, use quantidadeParcelas 1 e um unico item em parcelas.
+Rules:
+- fornecedor = EMITTER/VENDOR (14-digit CNPJ)
+- cliente = RECIPIENT/BUYER (destination)
+- tipo: "APAGAR" (expense) or "ARECEBER" (income)
+- classificacoesDespesa: when tipo="APAGAR"
+- classificacoesReceita: when tipo="ARECEBER"
+- parcelas: array with {valor, dataVencimento} for each installment
 
-Campos obrigatorios (NUNCA deixe em branco quando houver informacao no documento):
-- fornecedor: razaoSocial, fantasia, cnpj (14 digitos)
-- cliente: nomeOuRazaoSocial, documento (CPF 11 digitos ou CNPJ 14 digitos), endereco (COMPLETO)
-  IMPORTANTE: Endereco deve incluir: rua, numero, complemento (se houver), bairro, cidade, estado, CEP.
-  Extraia TUDO que conseguir encontrar. Nao coloque apenas o CEP ou apenas a cidade.
-- numeroNotaFiscal
-- dataEmissao (YYYY-MM-DD)
-- descricaoProdutos (texto resumido ou lista)
-- quantidadeParcelas
-- dataVencimento (primeira parcela ou unica) (YYYY-MM-DD)
-- valorTotal (numero)
-- parcelas: array de objetos {"valor": number, "dataVencimento": "YYYY-MM-DD"}
+Required fields NEVER leave blank:
+- fornecedor: razaoSocial, fantasia, cnpj (14 digits)
+- cliente: nomeOuRazaoSocial, documento (11 or 14 digits), endereco (COMPLETE)
+- numeroNotaFiscal, dataEmissao (YYYY-MM-DD), descricaoProdutos
+- quantidadeParcelas, dataVencimento (YYYY-MM-DD), valorTotal (number)
+- parcelas: array
 
-Se algum campo nao existir no PDF, devolva string vazia ou array vazio, mas mantenha a estrutura.
-
-Classificacoes permitidas (use exatamente um destes textos ou o mais proximo possivel):
+Allowed classifications:
 - INSUMOS AGRICOLAS
 - MANUTENCAO E OPERACAO
 - RECURSOS HUMANOS
@@ -316,22 +236,15 @@ Classificacoes permitidas (use exatamente um destes textos ou o mais proximo pos
 - SEGUROS E PROTECAO
 - IMPOSTOS E TAXAS
 - INVESTIMENTOS
-
-ATENCAO: Se o endereco estiver dividido em multiplas linhas no PDF, junte tudo em um texto unico separado por espacos ou virgulas.
 `;
-};
 };
 
 const findOrCreateFornecedor = async ({ razaoSocial, fantasia, cnpj }) => {
   const cleanCnpj = String(cnpj || '').replace(/\D/g, '');
-  if (!cleanCnpj) {
-    throw new Error('CNPJ do fornecedor é obrigatório.');
-  }
+  if (!cleanCnpj) throw new Error('CNPJ required');
 
   const [rows] = await db.query('SELECT * FROM mantem_fornecedor WHERE cnpj = ?', [cleanCnpj]);
-  if (rows.length) {
-    return { ...rows[0], exists: true };
-  }
+  if (rows.length) return { ...rows[0], exists: true };
 
   const [result] = await db.query(
     'INSERT INTO mantem_fornecedor (razao_social, nome_fantasia, cnpj, status) VALUES (?, ?, ?, ?)',
@@ -344,14 +257,10 @@ const findOrCreateFornecedor = async ({ razaoSocial, fantasia, cnpj }) => {
 
 const findOrCreateFaturado = async ({ nome, documento, endereco }) => {
   const cleanDoc = String(documento || '').replace(/\D/g, '');
-  if (!cleanDoc) {
-    throw new Error('Documento do faturado é obrigatório.');
-  }
+  if (!cleanDoc) throw new Error('Document required');
 
   const [rows] = await db.query('SELECT * FROM mantem_faturado WHERE documento = ?', [cleanDoc]);
-  if (rows.length) {
-    return { ...rows[0], exists: true };
-  }
+  if (rows.length) return { ...rows[0], exists: true };
 
   const [result] = await db.query(
     'INSERT INTO mantem_faturado (nome, documento, endereco, status) VALUES (?, ?, ?, ?)',
@@ -364,14 +273,10 @@ const findOrCreateFaturado = async ({ nome, documento, endereco }) => {
 
 const findOrCreateCliente = async ({ nome, documento, endereco }) => {
   const cleanDoc = String(documento || '').replace(/\D/g, '');
-  if (!cleanDoc) {
-    throw new Error('Documento do cliente é obrigatório.');
-  }
+  if (!cleanDoc) throw new Error('Client document required');
 
   const [rows] = await db.query('SELECT * FROM mantem_cliente WHERE documento = ?', [cleanDoc]);
-  if (rows.length) {
-    return { ...rows[0], exists: true };
-  }
+  if (rows.length) return { ...rows[0], exists: true };
 
   const [result] = await db.query(
     'INSERT INTO mantem_cliente (nome, documento, endereco, status) VALUES (?, ?, ?, ?)',
@@ -383,11 +288,8 @@ const findOrCreateCliente = async ({ nome, documento, endereco }) => {
 };
 
 const getTipoDespesaByDescricao = async (descricao) => {
-  const trimmed = String(descricao || '').trim();
-  if (!trimmed) {
-    return null;
-  }
-  const upper = trimmed.toUpperCase();
+  const upper = String(descricao || '').trim().toUpperCase();
+  if (!upper) return null;
   const [rows] = await db.query('SELECT * FROM tipo_despesa WHERE UPPER(descricao) = ?', [upper]);
   if (rows.length) {
     return rows[0];
@@ -583,63 +485,40 @@ const createParcelas = async ({ movimentoContaId, dataVencimento, quantidadeParc
 };
 
 const normalizeClassificationList = (value) => {
-  if (!value) {
-    return [];
-  }
+  if (!value) return [];
 
-  const parseSingle = (entry) => {
-    if (!entry) {
-      return [];
-    }
+  const parse = (entry) => {
+    if (!entry) return [];
     if (typeof entry === 'string') {
-      return entry
-        .split(/[,;|\/]+/)
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .map((item) => item.toUpperCase());
+      return entry.split(/[,;|\/]+/).map(i => i.trim()).filter(Boolean).map(i => i.toUpperCase());
     }
-    if (typeof entry === 'object') {
-      return Object.values(entry).flatMap(parseSingle);
-    }
+    if (typeof entry === 'object') return Object.values(entry).flatMap(parse);
     return [];
   };
 
-  const items = Array.isArray(value) ? value.flatMap(parseSingle) : parseSingle(value);
+  const items = Array.isArray(value) ? value.flatMap(parse) : parse(value);
   return [...new Set(items)];
 };
 
 const normalizeParcelDetails = (rawParcelas, quantidadeParcelas, valorTotal, dataVencimento) => {
+  // Use AI-provided parcelas if available
   if (Array.isArray(rawParcelas) && rawParcelas.length > 0) {
-    const items = rawParcelas
-      .map((item, index) => {
-        if (!item) {
-          return null;
-        }
+    const items = rawParcelas.map((item, index) => {
+      if (!item) return null;
+      
+      const valor = typeof item === 'object' 
+        ? normalizeNumber(item.valor ?? item.amount ?? item.value ?? item.total)
+        : normalizeNumber(item);
+      
+      const data = typeof item === 'object' ? toSqlDate(item.dataVencimento || item.data_vencimento || item.dueDate) : null;
+      
+      return { parcela: index + 1, valor: valor || 0, dataVencimento: data || null };
+    }).filter(Boolean);
 
-        if (typeof item === 'object') {
-          const valor = normalizeNumber(item.valor ?? item.amount ?? item.value ?? item.valorTotal ?? item.total);
-          const data = toSqlDate(item.dataVencimento || item.data_vencimento || item.vencimento || item.dueDate);
-          return {
-            parcela: index + 1,
-            valor: valor || 0,
-            dataVencimento: data || null
-          };
-        }
-
-        const valor = normalizeNumber(item);
-        return {
-          parcela: index + 1,
-          valor,
-          dataVencimento: null
-        };
-      })
-      .filter(Boolean);
-
-    if (items.length > 0) {
-      return items;
-    }
+    if (items.length > 0) return items;
   }
 
+  // Generate parcelas if not provided
   const count = normalizeInt(quantidadeParcelas);
   const baseValue = Math.floor((valorTotal * 100) / count) / 100;
   let remaining = Number((valorTotal - baseValue * count).toFixed(2));
@@ -647,9 +526,6 @@ const normalizeParcelDetails = (rawParcelas, quantidadeParcelas, valorTotal, dat
 
   return Array.from({ length: count }, (_, index) => {
     const amount = Number((baseValue + (index === count - 1 ? remaining : 0)).toFixed(2));
-    if (index === count - 1) {
-      remaining = 0;
-    }
     const dueDate = new Date(startDate);
     dueDate.setMonth(dueDate.getMonth() + index);
     return {
@@ -724,87 +600,40 @@ const findDocumentoInFaturadoSubtree = (parsedJson) => {
 };
 
 const normalizeParsedData = (parsedJson, pdfText) => {
-  const fornecedorData = parsedJson.fornecedor || {};
-  const faturadoData = parsedJson.faturado || parsedJson.cliente || {};
-  const classificacao = parsedJson.classificacaoDespesa || parsedJson.tipoDespesa || parsedJson.classificacao || '';
-  const tipo = String(parsedJson.tipo || parsedJson.tipoMovimento || parsedJson.movimento || '').toUpperCase() === 'ARECEBER' ? 'ARECEBER' : 'APAGAR';
-  const numeroNotaFiscal = parsedJson.numeroNotaFiscal || parsedJson.numero_nota_fiscal || parsedJson.notaFiscal || null;
-  const dataEmissao = toSqlDate(parsedJson.dataEmissao || parsedJson.data_emissao);
-  const dataVencimento = toSqlDate(parsedJson.dataVencimento || parsedJson.data_vencimento);
-  const valorTotal = normalizeNumber(parsedJson.valorTotal || parsedJson.valor_total);
-  const quantidadeParcelas = normalizeInt(parsedJson.quantidadeParcelas || (Array.isArray(parsedJson.parcelas) ? parsedJson.parcelas.length : parsedJson.parcelas) || 1);
-  const classificacoesDespesa = normalizeClassificationList(parsedJson.classificacoesDespesa || parsedJson.classificacoes || parsedJson.tipoDespesa || parsedJson.classificacaoDespesa || classificacao);
-  const classificacoesReceita = normalizeClassificationList(parsedJson.classificacoesReceita || parsedJson.tipoReceita || parsedJson.classificacaoReceita);
-  const rawParcelas = parsedJson.parcelas || parsedJson.parcelasDetalhadas || parsedJson.parcels;
-  const descricaoProdutos = normalizeText(parsedJson.descricaoProdutos || parsedJson.descricao_produtos || parsedJson.produtos || '');
-
-  const fornecedorCnpj = fornecedorData.cnpj || fornecedorData.CNPJ || findCnpjInParsedJson(parsedJson);
-  const faturadoDocumento = faturadoData.documento || faturadoData.cpf || faturadoData.cnpj || findDocumentoInFaturadoSubtree(parsedJson);
-
-  const normalizedFornecedorName = normalizeText(fornecedorData.razaoSocial || fornecedorData.razao_social || fornecedorData.nome || fornecedorData.nomeFantasia || fornecedorData.fantasia);
-  const normalizedFantasia = normalizeText(fornecedorData.fantasia || fornecedorData.nomeFantasia || fornecedorData.fantasia || fornecedorData.razaoSocial);
-  const normalizedFaturadoName = normalizeText(faturadoData.nome || faturadoData.nomeOuRazaoSocial || faturadoData.razaoSocial || faturadoData.nome_fantasia || faturadoData.razaoSocial);
-  const normalizedFaturadoAddress = normalizeText(faturadoData.endereco || faturadoData.address || '');
-
-  // Se a IA não encontrou o nome, tenta extrair via regex
-  const extractedFornecedorName = !normalizedFornecedorName && fornecedorCnpj
-    ? extractNameNearIdentifier(pdfText, fornecedorCnpj) || extractTextValue(pdfText, ['Raz[aã]o Social', 'Nome\/Raz[aã]o Social', 'Emitente', 'Fornecedor'])
-    : null;
-
-  const extractedFaturadoName = !normalizedFaturadoName && faturadoDocumento
-    ? extractNameNearIdentifier(pdfText, faturadoDocumento) || extractTextValue(pdfText, ['Destinat[aá]rio', 'Cliente', 'Comprador', 'Faturado'])
-    : null;
-
-  const extractedFaturadoAddress = !normalizedFaturadoAddress
-    ? extractTextValue(pdfText, ['Endere[cç]o', 'Rua', 'Av\.', 'Avenida', 'Logradouro', 'Endereco'])
-    : null;
-
-  const resolvedNome = normalizedFaturadoName || extractedFaturadoName || '';
-  const resolvedEndereco = normalizedFaturadoAddress || extractedFaturadoAddress || '';
-
-  console.log('[NORMALIZE] Dados normalizados:', {
-    cnpjFromIA: !!fornecedorData.cnpj,
-    cnpjFinal: fornecedorCnpj?.substring(0, 5) + '***',
-    nomeFromIA: !!normalizedFornecedorName,
-    nomeExtraido: !!extractedFornecedorName,
-    nomeFromRegex: !!extractedFaturadoName,
-    enderecoFromIA: !!normalizedFaturadoAddress,
-    enderecoExtraido: !!extractedFaturadoAddress,
-    tipo,
-    dataEmissao,
-    dataVencimento,
-    valorTotal
-  });
+  const fornecedor = parsedJson.fornecedor || {};
+  const cliente = parsedJson.faturado || parsedJson.cliente || {};
+  const tipo = (String(parsedJson.tipo || '').toUpperCase() === 'ARECEBER') ? 'ARECEBER' : 'APAGAR';
+  
+  const cnpj = (fornecedor.cnpj || '').replace(/\D/g, '');
+  const documento = (cliente.documento || cliente.cpf || cliente.cnpj || '').replace(/\D/g, '');
+  
+  // Try AI extracted data first, fallback to regex
+  const nomeF = fornecedor.razaoSocial || fornecedor.fantasia || 
+    (cnpj && extractNameNearIdentifier(pdfText, cnpj)) ||
+    extractTextValue(pdfText, ['Razão', 'Emitente']);
+  
+  const nomeC = cliente.nome || cliente.nomeOuRazaoSocial ||
+    (documento && extractNameNearIdentifier(pdfText, documento)) ||
+    extractTextValue(pdfText, ['Destinatário', 'Cliente']);
+  
+  const endereco = cliente.endereco ||
+    extractTextValue(pdfText, ['Endereço', 'Rua', 'Avenida']) || '';
 
   return {
-    fornecedorData: {
-      ...fornecedorData,
-      cnpj: fornecedorCnpj,
-      razaoSocial: normalizedFornecedorName || extractedFornecedorName || '',
-      fantasia: normalizedFantasia || extractedFornecedorName || ''
-    },
-    clienteData: {
-      nome: resolvedNome,
-      documento: faturadoDocumento,
-      endereco: resolvedEndereco
-    },
-    faturadoData: {
-      ...faturadoData,
-      documento: faturadoDocumento,
-      nome: resolvedNome,
-      endereco: resolvedEndereco
-    },
+    fornecedorData: { cnpj, razaoSocial: nomeF || '', fantasia: nomeF || '' },
+    clienteData: { nome: nomeC || '', documento, endereco },
+    faturadoData: { documento, nome: nomeC || '', endereco },
     tipo,
-    classificacao,
-    classificacoesDespesa,
-    classificacoesReceita,
-    numeroNotaFiscal,
-    dataEmissao,
-    dataVencimento,
-    valorTotal,
-    quantidadeParcelas,
-    descricaoProdutos,
-    rawParcelas
+    classificacao: parsedJson.classificacao || '',
+    classificacoesDespesa: normalizeClassificationList(parsedJson.classificacoesDespesa),
+    classificacoesReceita: normalizeClassificationList(parsedJson.classificacoesReceita),
+    numeroNotaFiscal: String(parsedJson.numeroNotaFiscal || '').trim(),
+    dataEmissao: toSqlDate(parsedJson.dataEmissao),
+    dataVencimento: toSqlDate(parsedJson.dataVencimento),
+    valorTotal: normalizeNumber(parsedJson.valorTotal),
+    quantidadeParcelas: normalizeInt(parsedJson.quantidadeParcelas),
+    descricaoProdutos: normalizeText(parsedJson.descricaoProdutos),
+    rawParcelas: parsedJson.parcelas || []
   };
 };
 
@@ -1199,265 +1028,175 @@ const extractPdfText = async (buffer) => {
     const text = parsed?.text?.trim();
     
     if (!text || text.length === 0) {
-      throw new Error('Nao foi possivel extrair texto do PDF. Verifique se o arquivo nao esta corrompido ou se e um PDF baseado em imagem (sem OCR).');
+      throw new Error('Cannot extract text. PDF may be image-based or corrupted');
     }
 
-    // Validar se há conteúdo mínimo
     const lines = text.split('\n').filter(line => line.trim().length > 0);
-    if (lines.length < 3) {
-      console.warn('[PDF] Aviso: PDF tem muito pouco conteúdo extraído', { linesCount: lines.length, textLength: text.length });
-    }
+    if (lines.length < 3) console.warn('[PDF] Warning: very little content');
 
-    console.log('[PDF] Extração bem-sucedida:', { 
-      textLength: text.length, 
-      linesCount: lines.length,
-      firstLine: lines[0]?.substring(0, 50),
-      lastLine: lines[lines.length - 1]?.substring(0, 50)
-    });
-
+    console.log('[PDF] Extracted:', { textLength: text.length, lines: lines.length });
     return text;
   } catch (error) {
-    console.error('[PDF] Erro ao extrair texto:', error.message);
-    throw new Error(`Falha ao extrair texto do PDF: ${error.message}`);
+    console.error('[PDF] Error:', error.message);
+    throw new Error(`PDF extraction failed: ${error.message}`);
   } finally {
     await parser.destroy();
   }
 };
 
-const generateWithOpenRouter = async (promptText) => {
+const generateWithOpenRouter = async (promptText, retryCount = 0) => {
   if (!process.env.OPENROUTER_API_KEY) {
-    const err = new Error('OPENROUTER_API_KEY nao esta configurada no backend.');
+    const err = new Error('OPENROUTER_API_KEY not set');
     err.provider = 'openrouter';
     err.status = 500;
     throw err;
   }
 
   const model = process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL;
+  console.log('[OPENROUTER] Requesting');
+
   const extractContent = (payload) => {
     const message = payload?.choices?.[0]?.message;
-    if (!message) {
-      return null;
-    }
-
-    if (typeof message.content === 'string' && message.content.trim()) {
-      return message.content;
-    }
-
+    if (!message) return null;
+    if (typeof message.content === 'string' && message.content.trim()) return message.content;
     if (Array.isArray(message.content)) {
-      const joined = message.content
-        .map((part) => (typeof part === 'string' ? part : part?.text || ''))
-        .join('\n')
-        .trim();
-      if (joined) {
-        return joined;
-      }
+      const joined = message.content.map((part) => (typeof part === 'string' ? part : part?.text || '')).join('\n').trim();
+      return joined || null;
     }
-
     return null;
   };
 
   const attempts = [
-    {
-      model,
-      messages: [{ role: 'user', content: promptText }],
-      response_format: { type: 'json_object' },
-      temperature: 0.1
-    },
-    {
-      model,
-      messages: [
-        {
-          role: 'user',
-          content: `${promptText}\n\nIMPORTANTE: responda com JSON valido no campo content.`
-        }
-      ],
-      temperature: 0.1
-    }
+    { model, messages: [{ role: 'user', content: promptText }], response_format: { type: 'json_object' }, temperature: 0.1, max_tokens: 4096 },
+    { model, messages: [{ role: 'user', content: `${promptText}\n\nReturn pure valid JSON.` }], temperature: 0.1, max_tokens: 4096 },
+    { model, messages: [{ role: 'user', content: `${promptText}\n\nJSON only, no markdown.` }], temperature: 0.05, max_tokens: 4096 }
   ];
 
-  for (const body of attempts) {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
-      },
-      body: JSON.stringify(body)
-    });
+  let lastError = null;
+  for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex++) {
+    const body = attempts[attemptIndex];
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
+        },
+        body: JSON.stringify(body),
+        timeout: 30000
+      });
 
-    const payload = await response.json();
-    if (!response.ok) {
-      const message = payload?.error?.message || `Erro OpenRouter (${response.status})`;
-      const providerError = new Error(message);
-      providerError.provider = 'openrouter';
-      providerError.status = response.status;
-      throw providerError;
-    }
+      const payload = await response.json();
+      if (!response.ok) {
+        const message = payload?.error?.message || `HTTP ${response.status}`;
+        lastError = new Error(message);
+        lastError.provider = 'openrouter';
+        lastError.status = response.status;
+        if (response.status === 429) throw lastError;
+        continue;
+      }
 
-    const content = extractContent(payload);
-    if (content) {
-      return content;
+      const content = extractContent(payload);
+      if (!content) {
+        lastError = new Error('Empty response');
+        continue;
+      }
+
+      try {
+        JSON.parse(content);
+        console.log('[OPENROUTER] OK');
+        return content;
+      } catch (jsonError) {
+        lastError = new Error(`Invalid JSON: ${jsonError.message}`);
+        continue;
+      }
+    } catch (fetchError) {
+      lastError = fetchError;
+      continue;
     }
   }
 
-  throw new Error('OpenRouter nao retornou conteudo.');
+  const finalError = lastError || new Error('All attempts failed');
+  finalError.provider = 'openrouter';
+  finalError.status = 500;
+  console.error('[OPENROUTER] Failed:', finalError.message);
+  throw finalError;
 };
 
 const generateWithGemini = async (promptText) => {
-  if (!process.env.GEMINI_API_KEY) {
-    const err = new Error('GEMINI_API_KEY nao esta configurada no backend.');
-    err.provider = 'gemini';
-    err.status = 500;
-    throw err;
-  }
-
-  try {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
-    const response = await ai.models.generateContent({
-      model,
-      contents: promptText,
-      config: { responseMimeType: 'application/json' }
-    });
-
-    const content = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!content) {
-      const err = new Error('Gemini nao retornou conteudo.');
-      err.provider = 'gemini';
-      err.status = 500;
-      throw err;
-    }
-
-    return content;
-  } catch (err) {
-    const msg = String(err?.message || err || '');
-    const statusGuess =
-      err?.status ??
-      err?.statusCode ??
-      (/\b429\b|RESOURCE_EXHAUSTED|quota exceeded|exceeded your current quota|rate limit|free_tier/i.test(msg) ? 429 : undefined);
-    const wrapped = new Error(msg || 'Erro ao chamar Gemini');
-    wrapped.provider = 'gemini';
-    wrapped.status = statusGuess || 500;
-    wrapped.cause = err;
-    throw wrapped;
-  }
+  const err = new Error('Gemini disabled. Use OpenRouter');
+  err.provider = 'gemini';
+  err.status = 503;
+  throw err;
 };
 
 const repairJsonWithProvider = async (rawText, provider) => {
-  const repairPrompt = `
-Converta o texto abaixo em JSON valido.
-Retorne SOMENTE JSON puro, sem markdown e sem comentarios.
-Nao invente dados novos; apenas corrija sintaxe.
-
-Texto:
-${rawText}
-`;
-
-  if (provider === 'gemini' && !hasGemini()) {
-    return generateWithOpenRouter(repairPrompt);
-  }
-  if (provider === 'openrouter' && !hasOpenRouter()) {
-    return generateWithGemini(repairPrompt);
-  }
-
-  return invokeLlmWithFallback(repairPrompt, 'reparo-json');
+  const repairPrompt = `Convert to valid JSON. Return pure JSON only, no markdown.\n${rawText}`;
+  return generateWithOpenRouter(repairPrompt);
 };
 
 const extractDataFromPdf = async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Nenhum arquivo PDF enviado.' });
-    }
+    if (!req.file) return res.status(400).json({ error: 'No PDF sent' });
 
-    console.log('[EXTRACT] Iniciando extração de PDF:', { 
-      fileName: req.file.originalname, 
-      fileSize: req.file.size,
-      mimetype: req.file.mimetype
-    });
+    console.log('[EXTRACT] Start:', { file: req.file.originalname, size: req.file.size });
 
-    // Etapa 1: Extrair texto do PDF
     const pdfText = await extractPdfText(req.file.buffer);
-    console.log('[EXTRACT] Etapa 1 concluída: Extração de texto');
+    console.log('[EXTRACT] Step 1: Text extracted');
 
-    // Etapa 2: Validar se há conteúdo mínimo
     const wordCount = pdfText.split(/\s+/).length;
-    if (wordCount < 10) {
-      console.warn('[EXTRACT] Aviso: PDF tem muito pouco conteúdo', { wordCount });
-    }
-
-    // Etapa 3: Construir e enviar prompt para IA
-    const promptText = buildPrompt(pdfText);
-    console.log('[EXTRACT] Etapa 2 concluída: Prompt construído, enviando para IA');
-
-    const resultText = await invokeLlmWithFallback(promptText, 'extracao-pdf');
-    console.log('[EXTRACT] Etapa 3 concluída: Resposta recebida da IA', {
-      responseLength: resultText.length,
-      hasJson: resultText.includes('{') && resultText.includes('}')
-    });
-
-    // Etapa 4: Parsear JSON
-    let parsedJson;
-    try {
-      parsedJson = parseModelJson(resultText);
-      console.log('[EXTRACT] Etapa 4 concluída: JSON parseado com sucesso');
-    } catch (firstParseError) {
-      console.warn('[EXTRACT] Primeira tentativa de parse falhou, tentando reparar JSON');
-      const candidate = extractJsonCandidate(resultText);
-      const repairedText = await repairJsonWithProvider(candidate, getProvider());
-      parsedJson = parseModelJson(repairedText);
-      console.log('[EXTRACT] Etapa 4 concluída: JSON reparado e parseado');
-    }
-
-    // Etapa 5: Validar campos críticos na resposta da IA
-    const cnpj = String(parsedJson?.fornecedor?.cnpj || '').replace(/\D/g, '');
-    const doc = String(parsedJson?.cliente?.documento || parsedJson?.faturado?.documento || '').replace(/\D/g, '');
-    const valorTotal = normalizeNumber(parsedJson?.valorTotal || 0);
-    
-    console.log('[EXTRACT] Validação de campos da IA:', {
-      cnpjPresente: cnpj.length === 14,
-      cnpjLength: cnpj.length,
-      docPresente: doc.length === 11 || doc.length === 14,
-      docLength: doc.length,
-      valorTotal,
-      tipo: parsedJson?.tipo,
-      dataEmissao: parsedJson?.dataEmissao,
-      dataVencimento: parsedJson?.dataVencimento,
-      endereco: parsedJson?.cliente?.endereco || parsedJson?.faturado?.endereco
-    });
-
-    // Etapa 6: Comparar com banco de dados
-    console.log('[EXTRACT] Etapa 5 concluída: Iniciando verificação no banco de dados');
-    const databaseResult = await checkPdfDataInDatabase(parsedJson, pdfText);
-    
-    console.log('[EXTRACT] Extração finalizada com sucesso', {
-      fornecedorExiste: databaseResult.database?.fornecedor?.exists,
-      faturadoExiste: databaseResult.database?.faturado?.exists,
-      clienteExiste: databaseResult.database?.cliente?.exists
-    });
-
-    res.json(databaseResult);
-  } catch (error) {
-    console.error('[EXTRACT] Erro durante extração:', {
-      errorMessage: error?.message,
-      errorProvider: error?.provider,
-      errorStatus: error?.status,
-      stack: error?.stack
-    });
-
-    if (error.provider) {
-      const providerName = error.provider === 'gemini' ? 'Gemini' : 'OpenRouter';
-      const providerError = sanitizeProviderError(providerName, error?.status, error?.message);
-      console.error('[EXTRACT] Erro do provedor:', providerError);
-      return res.status(providerError.status).json({
-        error: providerError.error,
-        details: providerError.details
+    const lineCount = pdfText.split('\n').length;
+    if (wordCount < 10 || lineCount < 3) {
+      return res.status(400).json({ 
+        error: 'PDF content too small',
+        details: `${wordCount} words, ${lineCount} lines. PDF may be image-based`
       });
     }
 
-    return res.status(500).json({
-      error: 'Erro ao processar a extração.',
-      details: error?.message || 'Falha inesperada no backend.'
+    const promptText = buildPrompt(pdfText);
+    console.log('[EXTRACT] Step 2: Prompt built');
+
+    const resultText = await invokeLlmWithFallback(promptText, 'extracao-pdf');
+    console.log('[EXTRACT] Step 3: Response received');
+
+    let parsedJson;
+    try {
+      parsedJson = parseModelJson(resultText);
+      console.log('[EXTRACT] Step 4: JSON parsed');
+    } catch (firstParseError) {
+      console.warn('[EXTRACT] JSON invalid, repairing...');
+      const candidate = extractJsonCandidate(resultText);
+      const repairedText = await repairJsonWithProvider(candidate, getProvider());
+      parsedJson = parseModelJson(repairedText);
+      console.log('[EXTRACT] Step 4: JSON repaired');
+    }
+
+    const cnpj = String(parsedJson?.fornecedor?.cnpj || '').replace(/\D/g, '');
+    const doc = String(parsedJson?.cliente?.documento || parsedJson?.faturado?.documento || '').replace(/\D/g, '');
+    const valor = normalizeNumber(parsedJson?.valorTotal || 0);
+    
+    console.log('[EXTRACT] Validation:', {
+      cnpj: cnpj.length === 14 ? 'OK' : `Error (${cnpj.length})`,
+      doc: (doc.length === 11 || doc.length === 14) ? 'OK' : `Error (${doc.length})`,
+      valor: valor > 0 ? 'OK' : 'Error'
     });
+
+    const databaseResult = await checkPdfDataInDatabase(parsedJson, pdfText);
+    console.log('[EXTRACT] Step 5: Database checked');
+    console.log('[EXTRACT] Done\n');
+
+    res.json(databaseResult);
+  } catch (error) {
+    console.error('[EXTRACT] Error:', error.message);
+
+    if (error.provider === 'openrouter') {
+      return res.status(error.status || 500).json({
+        error: 'OpenRouter error',
+        details: error.message
+      });
+    }
+
+    res.status(500).json({ error: 'Extraction failed', details: error?.message });
   }
 };
 
@@ -1467,63 +1206,66 @@ const validateParsedDataForSave = (parsedData) => {
   const faturado = parsedData?.faturado || {};
   const cliente = parsedData?.cliente || {};
   
+  // Check CNPJ format (14 digits)
   const cnpj = String(fornecedor.cnpj || '').replace(/\D/g, '');
   if (cnpj.length !== 14) {
-    errors.push(`CNPJ do fornecedor inválido: esperado 14 dígitos, recebido ${cnpj.length}. Valor: "${fornecedor.cnpj}"`);
+    errors.push(`CNPJ invalid: need 14 digits, got ${cnpj.length}`);
   }
   
+  // Check company name (min 5 chars)
   const razaoSocial = normalizeText(fornecedor.razaoSocial || fornecedor.razao_social || '');
   if (!razaoSocial || razaoSocial.length < 5) {
-    errors.push(`Razão social do fornecedor inválida ou muito curta: "${razaoSocial}"`);
+    errors.push(`Company name too short: "${razaoSocial}"`);
   }
 
+  // Check document (CPF 11 or CNPJ 14)
   const doc = String(faturado.documento || cliente.documento || '').replace(/\D/g, '');
   if (!(doc.length === 11 || doc.length === 14)) {
-    errors.push(`CPF/CNPJ do destinatário inválido: esperado 11 ou 14 dígitos, recebido ${doc.length}. Valor: "${faturado.documento || cliente.documento}"`);
+    errors.push(`Doc invalid: need 11 or 14 digits, got ${doc.length}`);
   }
 
+  // Check client name (min 5 chars)
   const nomeCliente = normalizeText(faturado.nome || cliente.nome || '');
   if (!nomeCliente || nomeCliente.length < 5) {
-    errors.push(`Nome do cliente/faturado inválido ou muito curto: "${nomeCliente}"`);
+    errors.push(`Client name too short: "${nomeCliente}"`);
   }
 
+  // Check address (min 10 chars)
   const endereco = normalizeText(faturado.endereco || cliente.endereco || '');
   if (!endereco || endereco.length < 10) {
-    errors.push(`Endereço do cliente incompleto (mínimo 10 caracteres): "${endereco}"`);
+    errors.push(`Address too short (min 10): "${endereco}"`);
   }
 
+  // Check value > 0
   const valorTotal = normalizeNumber(parsedData?.valorTotal);
   if (valorTotal <= 0) {
-    errors.push(`Valor total deve ser maior que zero: ${valorTotal}`);
+    errors.push(`Value must be > 0: ${valorTotal}`);
   }
 
+  // Check issue date
   if (!toSqlDate(parsedData?.dataEmissao)) {
-    errors.push(`Data de emissão inválida: "${parsedData?.dataEmissao}"`);
+    errors.push(`Invalid issue date: "${parsedData?.dataEmissao}"`);
   }
 
+  // Check due date
   if (!toSqlDate(parsedData?.dataVencimento)) {
-    errors.push(`Data de vencimento inválida: "${parsedData?.dataVencimento}"`);
+    errors.push(`Invalid due date: "${parsedData?.dataVencimento}"`);
   }
 
-  if (errors.length > 0) {
-    console.error('[VALIDATION] Erros de validação encontrados:', errors);
-  }
-
+  if (errors.length > 0) console.warn('[VALIDATION] Errors:', errors);
   return { ok: errors.length === 0, errors };
 };
 
 const confirmDatabaseSave = async (req, res) => {
   try {
     const { parsedData } = req.body;
-    if (!parsedData) {
-      return res.status(400).json({ error: 'parsedData is required to salvar no banco.' });
-    }
+    if (!parsedData) return res.status(400).json({ error: 'parsedData required' });
 
     const validation = validateParsedDataForSave(parsedData);
     if (!validation.ok) {
       return res.status(400).json({
-        error: 'Dados insuficientes para registrar o movimento.',
-        details: validation.errors.join(' '),
+        error: 'Validation failed',
+        details: validation.errors.join('; '),
         validationErrors: validation.errors
       });
     }
@@ -1531,9 +1273,9 @@ const confirmDatabaseSave = async (req, res) => {
     const databaseResult = await savePdfDataToDatabase(parsedData);
     res.json({ parsedData, database: databaseResult });
   } catch (error) {
-    console.error('Erro ao salvar dados no banco:', error);
-    const providerError = sanitizeProviderError('Banco de Dados', error?.status, error?.message);
-    res.status(providerError.status).json({ error: providerError.error, details: providerError.details });
+    console.error('[SAVE] Error:', error.message);
+    const err = sanitizeProviderError('Database', error?.status, error?.message);
+    res.status(err.status).json({ error: err.error, details: err.details });
   }
 };
 
