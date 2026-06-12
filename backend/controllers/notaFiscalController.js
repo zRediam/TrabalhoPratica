@@ -15,16 +15,27 @@ const hasOpenRouter = () => {
   if (!hasKey) console.error('[PROVIDER] Key not set');
   return hasKey;
 };
+<<<<<<< HEAD
 
 const hasGemini = () => false; // disabled
 
 const invokeLlmWithFallback = async (promptText, contextLabel = 'extracao', options = { jsonResponse: true }) => {
+=======
+
+const hasGemini = () => false; // disabled
+
+const invokeLlmWithFallback = async (promptText, contextLabel = 'extracao') => {
+>>>>>>> 317ca5b3daeb347ae9f85197b2ae1831d949e86f
   console.log(`[LLM-${contextLabel}] Using OpenRouter`);
   
   if (!hasOpenRouter()) throw new Error('OPENROUTER_API_KEY missing');
 
   try {
+<<<<<<< HEAD
     const response = await generateWithOpenRouter(promptText, options);
+=======
+    const response = await generateWithOpenRouter(promptText);
+>>>>>>> 317ca5b3daeb347ae9f85197b2ae1831d949e86f
     console.log(`[LLM-${contextLabel}] OK`);
     return response;
   } catch (error) {
@@ -1259,7 +1270,11 @@ const extractPdfText = async (buffer) => {
   }
 };
 
+<<<<<<< HEAD
 const generateWithOpenRouter = async (promptText, options = { jsonResponse: true }) => {
+=======
+const generateWithOpenRouter = async (promptText, retryCount = 0) => {
+>>>>>>> 317ca5b3daeb347ae9f85197b2ae1831d949e86f
   if (!process.env.OPENROUTER_API_KEY) {
     const err = new Error('OPENROUTER_API_KEY not set');
     err.provider = 'openrouter';
@@ -1281,6 +1296,7 @@ const generateWithOpenRouter = async (promptText, options = { jsonResponse: true
     return null;
   };
 
+<<<<<<< HEAD
   const createAttempt = (messageContent) => {
     const attempt = {
       model,
@@ -1348,6 +1364,52 @@ const generateWithOpenRouter = async (promptText, options = { jsonResponse: true
 
       console.log('[OPENROUTER] OK');
       return content;
+=======
+  const attempts = [
+    { model, messages: [{ role: 'user', content: promptText }], response_format: { type: 'json_object' }, temperature: 0.1, max_tokens: 4096 },
+    { model, messages: [{ role: 'user', content: `${promptText}\n\nReturn pure valid JSON.` }], temperature: 0.1, max_tokens: 4096 },
+    { model, messages: [{ role: 'user', content: `${promptText}\n\nJSON only, no markdown.` }], temperature: 0.05, max_tokens: 4096 }
+  ];
+
+  let lastError = null;
+  for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex++) {
+    const body = attempts[attemptIndex];
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
+        },
+        body: JSON.stringify(body),
+        timeout: 30000
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        const message = payload?.error?.message || `HTTP ${response.status}`;
+        lastError = new Error(message);
+        lastError.provider = 'openrouter';
+        lastError.status = response.status;
+        if (response.status === 429) throw lastError;
+        continue;
+      }
+
+      const content = extractContent(payload);
+      if (!content) {
+        lastError = new Error('Empty response');
+        continue;
+      }
+
+      try {
+        JSON.parse(content);
+        console.log('[OPENROUTER] OK');
+        return content;
+      } catch (jsonError) {
+        lastError = new Error(`Invalid JSON: ${jsonError.message}`);
+        continue;
+      }
+>>>>>>> 317ca5b3daeb347ae9f85197b2ae1831d949e86f
     } catch (fetchError) {
       lastError = fetchError;
       continue;
