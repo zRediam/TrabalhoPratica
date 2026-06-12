@@ -2,6 +2,7 @@ import { useState } from 'react';
 import UploadNota from './components/UploadNota';
 import JsonViewer from './components/JsonViewer';
 import DatabaseViewer from './components/DatabaseViewer';
+import QueryRag from './components/QueryRag';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 const NOTAS_API = `${API_BASE_URL}/api/notas`;
@@ -18,6 +19,10 @@ function App() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifyError, setVerifyError] = useState(null);
   const [statusUpdateLoading, setStatusUpdateLoading] = useState(false);
+  const [queryText, setQueryText] = useState('');
+  const [queryLoading, setQueryLoading] = useState(false);
+  const [queryError, setQueryError] = useState(null);
+  const [queryResult, setQueryResult] = useState(null);
 
   const handleExtraction = async (file) => {
     setIsExtracting(true);
@@ -135,6 +140,38 @@ function App() {
     }
   };
 
+  const handleQuerySubmit = async (event) => {
+    event.preventDefault();
+    if (!queryText.trim()) {
+      setQueryError('Digite sua pergunta para buscar no banco.');
+      return;
+    }
+
+    setQueryLoading(true);
+    setQueryError(null);
+    setQueryResult(null);
+
+    try {
+      const response = await fetch(`${NOTAS_API}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: queryText.trim() })
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload?.details || payload?.error || 'Falha na consulta RAG.');
+      }
+
+      setQueryResult(payload);
+    } catch (error) {
+      console.error(error);
+      setQueryError(error.message || 'Falha inesperada na consulta RAG.');
+    } finally {
+      setQueryLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-neutral-100 flex flex-col items-center py-10 px-4 font-sans">
       <div className="w-full max-w-5xl space-y-8">
@@ -238,6 +275,15 @@ function App() {
               statusUpdateLoading={statusUpdateLoading}
             />
           )}
+
+          <QueryRag
+            question={queryText}
+            setQuestion={setQueryText}
+            onSubmit={handleQuerySubmit}
+            isLoading={queryLoading}
+            result={queryResult}
+            error={queryError}
+          />
 
           {data && (
             <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4 sm:p-5 space-y-4">

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { extractDataFromPdf, confirmDatabaseSave, listEntities, toggleStatus } = require('../controllers/notaFiscalController');
+const { extractDataFromPdf, confirmDatabaseSave, listEntities, toggleStatus, queryDatabaseWithRag } = require('../controllers/notaFiscalController');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -16,6 +16,7 @@ const upload = multer({
 
 router.post('/extract', upload.single('file'), extractDataFromPdf);
 router.post('/confirm', confirmDatabaseSave);
+router.post('/query', queryDatabaseWithRag);
 router.get('/list', listEntities);
 router.patch('/toggle-status', toggleStatus);
 

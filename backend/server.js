@@ -40,7 +40,25 @@ const notaFiscalRoutes = require('./routes/notaFiscalRoutes');
 app.use('/api/notas', notaFiscalRoutes);
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Backend is running!' });
+  const openrouterConfigured = Boolean(String(process.env.OPENROUTER_API_KEY || '').trim());
+  const openrouterKeyPreview = openrouterConfigured 
+    ? process.env.OPENROUTER_API_KEY.substring(0, 10) + '***' 
+    : 'NÃO CONFIGURADA';
+  
+  res.json({ 
+    status: 'ok', 
+    message: 'Backend is running!',
+    config: {
+      provider: 'OpenRouter (Gemini desativado)',
+      openrouterConfigured,
+      openrouterKeyPreview,
+      model: process.env.OPENROUTER_MODEL || 'openai/gpt-oss-20b:free',
+      database: {
+        host: process.env.DB_HOST || 'localhost',
+        user: process.env.DB_USER || 'root'
+      }
+    }
+  });
 });
 
 app.use((error, req, res, next) => {
