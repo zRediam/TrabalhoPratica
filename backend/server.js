@@ -4,14 +4,28 @@ const mysql = require('mysql2/promise');
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const session = require('express-session');
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(cors({
+  origin: 'http://localhost:5173',
+  credentials: true
+}));
 app.use(express.json());
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'seu-segredo-super-secreto-aqui',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: false,
+    httpOnly: true,
+    maxAge: 1000 * 60 * 60 * 24 // 24 horas
+  }
+}));
 
 const initSqlFile = path.join(__dirname, 'database', 'init.sql');
 const { runSchemaPatches } = require('./database/schemaPatches');
@@ -28,16 +42,22 @@ const ensureDatabaseSchema = async () => {
 
     await connection.query(initSql);
     await connection.end();
-    console.log('Database schema checked/created successfully.');
+    console.log('Esquema do banco verificado/criado com sucesso.');
   } catch (error) {
     console.error('Erro ao garantir esquema do banco:', error);
   }
 };
 
-// Routes
+// Rotas
 const notaFiscalRoutes = require('./routes/notaFiscalRoutes');
+const authRoutes = require('./routes/authRoutes');
+const crudRoutes = require('./routes/crudRoutes');
+const userRoutes = require('./routes/userRoutes');
 
 app.use('/api/notas', notaFiscalRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api', userRoutes);
+app.use('/api', crudRoutes);
 
 app.get('/api/health', (req, res) => {
   const openrouterConfigured = Boolean(String(process.env.OPENROUTER_API_KEY || '').trim());
@@ -47,7 +67,7 @@ app.get('/api/health', (req, res) => {
   
   res.json({ 
     status: 'ok', 
-    message: 'Backend is running!',
+    message: 'Backend em execução!',
     config: {
       provider: 'OpenRouter (Gemini desativado)',
       openrouterConfigured,
@@ -77,7 +97,7 @@ ensureDatabaseSchema()
   .then(() => runSchemaPatches())
   .then(() => {
     app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
+      console.log(`Servidor rodando na porta ${PORT}`);
     });
   })
   .catch((err) => {

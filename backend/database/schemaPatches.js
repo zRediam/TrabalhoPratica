@@ -21,7 +21,8 @@ const runSchemaPatches = async () => {
   const alters = [
     "ALTER TABLE parcelacontas ADD COLUMN identificacao ENUM('UNICA','PARCELADA') NOT NULL DEFAULT 'UNICA'",
     'ALTER TABLE contas_pagar ADD COLUMN movimento_contas_id INT NULL',
-    'ALTER TABLE movimentocontas ADD COLUMN descricao_produtos LONGTEXT'
+    'ALTER TABLE movimentocontas ADD COLUMN descricao_produtos LONGTEXT',
+    "ALTER TABLE movimentocontas ADD COLUMN status ENUM('ATIVO', 'INATIVO') DEFAULT 'ATIVO'"
   ];
 
   for (const sql of alters) {
@@ -55,6 +56,54 @@ CREATE TABLE IF NOT EXISTS contas_receber (
     await connection.query(createContasReceber);
   } catch (err) {
     console.warn('[schemaPatches] contas_receber:', err.message);
+  }
+
+  // Garante tabela de usuários
+  const createUsuarios = `
+CREATE TABLE IF NOT EXISTS usuarios (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  nome VARCHAR(255) NOT NULL,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  senha_hash VARCHAR(255) NOT NULL,
+  status ENUM('ATIVO', 'INATIVO') DEFAULT 'ATIVO',
+  criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);`;
+
+  try {
+    await connection.query(createUsuarios);
+  } catch (err) {
+    console.warn('[schemaPatches] usuarios:', err.message);
+  }
+
+  // Migrar coluna legada "ativo" para "status", se necessário
+  try {
+    const [ativoCol] = await connection.query("SHOW COLUMNS FROM usuarios LIKE 'ativo'");
+    const [statusCol] = await connection.query("SHOW COLUMNS FROM usuarios LIKE 'status'");
+    if (ativoCol.length && !statusCol.length) {
+      await connection.query(
+        "ALTER TABLE usuarios CHANGE COLUMN ativo status ENUM('ATIVO', 'INATIVO') DEFAULT 'ATIVO'"
+      );
+    }
+  } catch (err) {
+    console.warn('[schemaPatches] migração ativo→status:', err.message);
+  }
+
+  // Garantir usuário administrador padrão (admin@admin.com / admin123)
+  try {
+    const crypto = require('crypto');
+    const [adminRows] = await connection.query("SELECT id FROM usuarios WHERE email = 'admin@admin.com'");
+    if (adminRows.length === 0) {
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = crypto.pbkdf2Sync('admin123', salt, 1000, 64, 'sha512').toString('hex');
+      const senhaHash = `${salt}:${hash}`;
+      await connection.query(
+        "INSERT INTO usuarios (email, senha_hash, nome, status) VALUES (?, ?, ?, ?)",
+        ['admin@admin.com', senhaHash, 'Administrador', 'ATIVO']
+      );
+      console.log('[schemaPatches] Usuário admin padrão criado (admin@admin.com / admin123)');
+    }
+  } catch (err) {
+    console.warn('[schemaPatches] admin padrão:', err.message);
   }
 
   await connection.end();

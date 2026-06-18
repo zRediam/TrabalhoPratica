@@ -1,28 +1,64 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import UploadNota from './components/UploadNota';
 import JsonViewer from './components/JsonViewer';
-import DatabaseViewer from './components/DatabaseViewer';
 import QueryRag from './components/QueryRag';
+import Login from './components/Login';
+import ContasManager from './components/ContasManager';
+import PessoasManager from './components/PessoasManager';
+import ClassificacoesManager from './components/ClassificacoesManager';
+import UsuariosManager from './components/UsuariosManager';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 const NOTAS_API = `${API_BASE_URL}/api/notas`;
 
 function App() {
+  const [usuario, setUsuario] = useState(null);
+  const [currentView, setCurrentView] = useState('notas'); // 'notas' | 'contas' | 'pessoas' | 'classificacoes'
+  const [seedLoading, setSeedLoading] = useState(false);
+  const [seedMessage, setSeedMessage] = useState(null);
+  const [seedError, setSeedError] = useState(null);
+  
   const [isExtracting, setIsExtracting] = useState(false);
   const [data, setData] = useState(null);
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveMessage, setSaveMessage] = useState(null);
   const [saveError, setSaveError] = useState(null);
   const [extractionError, setExtractionError] = useState(null);
-  const [verificationData, setVerificationData] = useState(null);
-  const [selectedListType, setSelectedListType] = useState('all');
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [verifyError, setVerifyError] = useState(null);
-  const [statusUpdateLoading, setStatusUpdateLoading] = useState(false);
   const [queryText, setQueryText] = useState('');
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryError, setQueryError] = useState(null);
   const [queryResult, setQueryResult] = useState(null);
+
+  // Verificar sessão ao carregar
+  useEffect(() => {
+    const usuarioSalvo = localStorage.getItem('usuario');
+    if (usuarioSalvo) {
+      setUsuario(JSON.parse(usuarioSalvo));
+    }
+  }, []);
+
+  const handleLoginSuccess = (usuarioData) => {
+    setUsuario(usuarioData);
+  };
+
+  const handleLogout = () => {
+    fetch(`${API_BASE_URL}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include'
+    })
+      .then(() => {
+        localStorage.removeItem('usuario');
+        setUsuario(null);
+        setData(null);
+        setQueryResult(null);
+      })
+      .catch(console.error);
+  };
+
+  // Se não estiver autenticado, mostrar Login
+  if (!usuario) {
+    return <Login onLoginSuccess={handleLoginSuccess} />;
+  }
 
   const handleExtraction = async (file) => {
     setIsExtracting(true);
@@ -95,51 +131,6 @@ function App() {
     }
   };
 
-  const handleVerifyDatabase = async (type = 'all') => {
-    setVerificationData(null);
-    setVerifyError(null);
-    setIsVerifying(true);
-    setSelectedListType(type);
-
-    try {
-      const response = await fetch(`${NOTAS_API}/list?type=${type}`);
-      if (!response.ok) {
-        const errorPayload = await response.json().catch(() => ({}));
-        throw new Error(errorPayload?.details || errorPayload?.error || 'Falha ao consultar o banco.');
-      }
-      const result = await response.json();
-      setVerificationData(result);
-    } catch (error) {
-      console.error(error);
-      setVerifyError(error.message || 'Falha inesperada.');
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  const handleToggleStatus = async (entity, id) => {
-    setStatusUpdateLoading(true);
-    setVerifyError(null);
-
-    try {
-      const response = await fetch(`${NOTAS_API}/toggle-status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entity, id })
-      });
-      if (!response.ok) {
-        const errorPayload = await response.json().catch(() => ({}));
-        throw new Error(errorPayload?.details || errorPayload?.error || 'Falha ao atualizar status.');
-      }
-      await handleVerifyDatabase(selectedListType);
-    } catch (error) {
-      console.error(error);
-      setVerifyError(error.message || 'Falha inesperada ao atualizar status.');
-    } finally {
-      setStatusUpdateLoading(false);
-    }
-  };
-
   const handleQuerySubmit = async (event) => {
     event.preventDefault();
     if (!queryText.trim()) {
@@ -172,9 +163,34 @@ function App() {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-neutral-100 flex flex-col items-center py-10 px-4 font-sans">
-      <div className="w-full max-w-5xl space-y-8">
+  const handleTriggerSeed = async () => {
+    if (!window.confirm('Isto limpará o banco atual e gerará 200 registros fictícios de teste. Continuar?')) {
+      return;
+    }
+
+    setSeedLoading(true);
+    setSeedMessage(null);
+    setSeedError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/seed`, {
+        method: 'POST'
+      });
+      const resData = await response.json();
+      if (!response.ok) {
+        throw new Error(resData.error || 'Falha ao gerar massa de dados.');
+      }
+      setSeedMessage(resData.message);
+    } catch (err) {
+      setSeedError(err.message);
+    } finally {
+      setSeedLoading(false);
+    }
+  };
+
+  const renderNotasView = () => {
+    return (
+      <div className="space-y-6">
         <header className="text-center">
           <h1 className="text-4xl font-bold text-gray-800 tracking-tight">Leitura e lançamento de notas</h1>
           <p className="text-gray-500 mt-2 text-lg max-w-2xl mx-auto">
@@ -193,88 +209,6 @@ function App() {
               </div>
             )}
           </section>
-
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-900">
-            <p className="font-semibold">Consultar cadastros no banco</p>
-            <p className="mt-2">Fornecedores, clientes, faturados, despesas, receitas, movimentos e parcelas.</p>
-            <div className="mt-4 grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
-              <button
-                type="button"
-                onClick={() => handleVerifyDatabase('all')}
-                disabled={isVerifying}
-                className={`rounded-xl px-4 py-3 font-semibold text-white transition ${selectedListType === 'all' ? 'bg-slate-900' : 'bg-slate-700 hover:bg-slate-800'} ${isVerifying ? 'opacity-70 cursor-not-allowed' : ''}`}
-              >
-                Todos
-              </button>
-              <button
-                type="button"
-                onClick={() => handleVerifyDatabase('fornecedor')}
-                disabled={isVerifying}
-                className={`rounded-xl px-4 py-3 font-semibold text-white transition ${selectedListType === 'fornecedor' ? 'bg-slate-900' : 'bg-slate-700 hover:bg-slate-800'} ${isVerifying ? 'opacity-70 cursor-not-allowed' : ''}`}
-              >
-                Fornecedores
-              </button>
-              <button
-                type="button"
-                onClick={() => handleVerifyDatabase('cliente')}
-                disabled={isVerifying}
-                className={`rounded-xl px-4 py-3 font-semibold text-white transition ${selectedListType === 'cliente' ? 'bg-slate-900' : 'bg-slate-700 hover:bg-slate-800'} ${isVerifying ? 'opacity-70 cursor-not-allowed' : ''}`}
-              >
-                Clientes
-              </button>
-              <button
-                type="button"
-                onClick={() => handleVerifyDatabase('faturado')}
-                disabled={isVerifying}
-                className={`rounded-xl px-4 py-3 font-semibold text-white transition ${selectedListType === 'faturado' ? 'bg-slate-900' : 'bg-slate-700 hover:bg-slate-800'} ${isVerifying ? 'opacity-70 cursor-not-allowed' : ''}`}
-              >
-                Faturados
-              </button>
-              <button
-                type="button"
-                onClick={() => handleVerifyDatabase('despesa')}
-                disabled={isVerifying}
-                className={`rounded-xl px-4 py-3 font-semibold text-white transition ${selectedListType === 'despesa' ? 'bg-slate-900' : 'bg-slate-700 hover:bg-slate-800'} ${isVerifying ? 'opacity-70 cursor-not-allowed' : ''}`}
-              >
-                Despesas
-              </button>
-              <button
-                type="button"
-                onClick={() => handleVerifyDatabase('receita')}
-                disabled={isVerifying}
-                className={`rounded-xl px-4 py-3 font-semibold text-white transition ${selectedListType === 'receita' ? 'bg-slate-900' : 'bg-slate-700 hover:bg-slate-800'} ${isVerifying ? 'opacity-70 cursor-not-allowed' : ''}`}
-              >
-                Receitas
-              </button>
-              <button
-                type="button"
-                onClick={() => handleVerifyDatabase('movimento')}
-                disabled={isVerifying}
-                className={`rounded-xl px-4 py-3 font-semibold text-white transition ${selectedListType === 'movimento' ? 'bg-slate-900' : 'bg-slate-700 hover:bg-slate-800'} ${isVerifying ? 'opacity-70 cursor-not-allowed' : ''}`}
-              >
-                Movimentos
-              </button>
-              <button
-                type="button"
-                onClick={() => handleVerifyDatabase('parcela')}
-                disabled={isVerifying}
-                className={`rounded-xl px-4 py-3 font-semibold text-white transition ${selectedListType === 'parcela' ? 'bg-slate-900' : 'bg-slate-700 hover:bg-slate-800'} ${isVerifying ? 'opacity-70 cursor-not-allowed' : ''}`}
-              >
-                Parcelas
-              </button>
-            </div>
-            {verifyError && (
-              <p className="mt-3 text-sm text-red-600">{verifyError}</p>
-            )}
-          </div>
-
-          {verificationData && (
-            <DatabaseViewer
-              data={verificationData}
-              onToggleStatus={handleToggleStatus}
-              statusUpdateLoading={statusUpdateLoading}
-            />
-          )}
 
           <QueryRag
             question={queryText}
@@ -314,6 +248,110 @@ function App() {
           )}
         </main>
       </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
+      {/* Barra lateral */}
+      <aside className="w-full md:w-64 bg-slate-900 text-white flex flex-col border-r border-slate-800 shrink-0">
+        {/* Logo / título */}
+        <div className="p-6 border-b border-slate-800 flex items-center gap-3">
+          <div>
+            <h1 className="font-bold text-lg leading-tight">TBPB</h1>
+            <p className="text-xs text-slate-400">Painel Financeiro</p>
+          </div>
+        </div>
+        
+        {/* Navegação */}
+        <nav className="flex-grow p-4 space-y-1.5">
+          <button
+            onClick={() => setCurrentView('notas')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition cursor-pointer ${currentView === 'notas' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+          >
+            NOTAS
+          </button>
+          <button
+            onClick={() => setCurrentView('contas')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition cursor-pointer ${currentView === 'contas' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+          >
+            CONTAS
+          </button>
+          <button
+            onClick={() => setCurrentView('pessoas')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition cursor-pointer ${currentView === 'pessoas' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+          >
+            CADASTROS
+          </button>
+          <button
+            onClick={() => setCurrentView('classificacoes')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition cursor-pointer ${currentView === 'classificacoes' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+          >
+            CLASSIFICADOS
+          </button>
+          <button
+            onClick={() => setCurrentView('usuarios')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition cursor-pointer ${currentView === 'usuarios' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+          >
+            USUARIOS
+          </button>
+          
+          <div className="pt-6 border-t border-slate-800 mt-6 space-y-2">
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-500 px-4">Ações Rápidas</p>
+            <button
+              onClick={handleTriggerSeed}
+              disabled={seedLoading}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-semibold text-slate-400 hover:bg-emerald-950 hover:text-emerald-300 transition cursor-pointer"
+            >
+              <span>⚙️</span> {seedLoading ? 'Gerando...' : 'Gerar 200 Itens de Teste'}
+            </button>
+          </div>
+        </nav>
+
+        {/* Perfil do usuário e logout */}
+        <div className="p-4 border-t border-slate-800 bg-slate-950/40 flex items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 bg-violet-600 rounded-full flex items-center justify-center text-white font-bold shrink-0">
+              {usuario.nome?.[0]?.toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <p className="font-semibold text-slate-200 truncate">{usuario.nome}</p>
+              <p className="text-slate-500 truncate">{usuario.email}</p>
+            </div>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="p-2 hover:bg-rose-950 text-slate-400 hover:text-rose-400 rounded-lg transition cursor-pointer shrink-0"
+            title="Sair"
+          >
+            🚪
+          </button>
+        </div>
+      </aside>
+
+      {/* Área principal */}
+      <main className="flex-grow p-6 md:p-10 overflow-y-auto">
+        {seedMessage && (
+          <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 flex justify-between items-center" role="alert">
+            <span>{seedMessage}</span>
+            <button onClick={() => setSeedMessage(null)} className="font-bold cursor-pointer">×</button>
+          </div>
+        )}
+        {seedError && (
+          <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 flex justify-between items-center" role="alert">
+            <span>{seedError}</span>
+            <button onClick={() => setSeedError(null)} className="font-bold cursor-pointer">×</button>
+          </div>
+        )}
+
+        <div className="max-w-5xl mx-auto">
+          {currentView === 'notas' && renderNotasView()}
+          {currentView === 'contas' && <ContasManager apiBaseUrl={`${API_BASE_URL}/api`} />}
+          {currentView === 'pessoas' && <PessoasManager apiBaseUrl={`${API_BASE_URL}/api`} />}
+          {currentView === 'classificacoes' && <ClassificacoesManager apiBaseUrl={`${API_BASE_URL}/api`} />}
+          {currentView === 'usuarios' && <UsuariosManager apiBaseUrl={`${API_BASE_URL}/api`} />}
+        </div>
+      </main>
     </div>
   );
 }

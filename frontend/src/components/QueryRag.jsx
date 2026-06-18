@@ -1,9 +1,9 @@
 function QueryRag({ question, setQuestion, onSubmit, isLoading, result, error }) {
   return (
     <section className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4 sm:p-5">
-      <p className="text-xs font-bold uppercase tracking-widest text-violet-700 mb-2">3 · Consulta inteligente</p>
+      <p className="text-xs font-bold uppercase tracking-widest text-violet-700 mb-2">Consulta</p>
       <p className="text-sm text-violet-950 font-medium mb-4">
-        Faça perguntas sobre o banco de dados e obtenha uma resposta elaborada pelo agente RAG.
+        Faça uma pergunta.
       </p>
 
       <form onSubmit={onSubmit} className="space-y-4">
@@ -22,7 +22,7 @@ function QueryRag({ question, setQuestion, onSubmit, isLoading, result, error })
             ? 'bg-gray-400 cursor-not-allowed'
             : 'bg-violet-700 hover:bg-violet-800'}`}
         >
-          {isLoading ? 'Consultando...' : 'Perguntar ao agente'}
+          {isLoading ? 'Consultando...' : 'Perguntar'}
         </button>
       </form>
 

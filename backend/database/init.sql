@@ -139,3 +139,13 @@ INSERT IGNORE INTO tipo_receita (descricao) VALUES
 ('SERVIÇOS PRESTADOS'),
 ('RECEITA FINANCEIRA'),
 ('RECEITA DIVERSA');
+CREATE TABLE IF NOT EXISTS usuarios (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nome VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    senha_hash VARCHAR(255) NOT NULL,
+    status ENUM('ATIVO', 'INATIVO') DEFAULT 'ATIVO',
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Usuário administrador padrão é criado automaticamente em schemaPatches.js (admin@admin.com / admin123)

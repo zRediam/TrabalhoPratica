@@ -1,45 +1,25 @@
 const { PDFParse } = require('pdf-parse');
-const { GoogleGenAI } = require('@google/genai');
 const db = require('../config/db');
 
 const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-oss-20b:free';
-const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
-
-const getProvider = () => {
-  console.log('[PROVIDER] OpenRouter only');
-  return 'openrouter';
-};
 
 const hasOpenRouter = () => {
   const hasKey = Boolean(String(process.env.OPENROUTER_API_KEY || '').trim());
-  if (!hasKey) console.error('[PROVIDER] Key not set');
+  if (!hasKey) console.error('[PROVIDER] Chave não configurada');
   return hasKey;
 };
-<<<<<<< HEAD
-
-const hasGemini = () => false; // disabled
 
 const invokeLlmWithFallback = async (promptText, contextLabel = 'extracao', options = { jsonResponse: true }) => {
-=======
+  console.log(`[LLM-${contextLabel}] Usando OpenRouter`);
 
-const hasGemini = () => false; // disabled
-
-const invokeLlmWithFallback = async (promptText, contextLabel = 'extracao') => {
->>>>>>> 317ca5b3daeb347ae9f85197b2ae1831d949e86f
-  console.log(`[LLM-${contextLabel}] Using OpenRouter`);
-  
-  if (!hasOpenRouter()) throw new Error('OPENROUTER_API_KEY missing');
+  if (!hasOpenRouter()) throw new Error('OPENROUTER_API_KEY ausente');
 
   try {
-<<<<<<< HEAD
     const response = await generateWithOpenRouter(promptText, options);
-=======
-    const response = await generateWithOpenRouter(promptText);
->>>>>>> 317ca5b3daeb347ae9f85197b2ae1831d949e86f
     console.log(`[LLM-${contextLabel}] OK`);
     return response;
   } catch (error) {
-    console.error(`[LLM-${contextLabel}] Error:`, error.message);
+    console.error(`[LLM-${contextLabel}] Erro:`, error.message);
     throw error;
   }
 };
@@ -76,7 +56,7 @@ const extractTextValue = (pdfText, labels) => {
   if (!pdfText) return null;
 
   for (const label of labels) {
-    // Pattern 1: label: value
+    // Padrão 1: rótulo: valor
     let regex = new RegExp(`${label}\\s*[:\\-]?\\s*([^\\n\\r]{3,200})`, 'i');
     let match = regex.exec(pdfText);
     if (match && match[1]) {
@@ -84,7 +64,7 @@ const extractTextValue = (pdfText, labels) => {
       if (value.length >= 3) return value;
     }
 
-    // Pattern 2: label on line, value below
+    // Padrão 2: rótulo em uma linha, valor abaixo
     regex = new RegExp(`^\\s*${label}\\s*$[\\r\\n]+([^\\n\\r]{3,200})`, 'im');
     match = regex.exec(pdfText);
     if (match && match[1]) {
@@ -92,7 +72,7 @@ const extractTextValue = (pdfText, labels) => {
       if (value.length >= 3) return value;
     }
 
-    // Pattern 3: label with spaces
+    // Padrão 3: rótulo com espaços
     regex = new RegExp(`${label}[\\s\\:\\-\\.]*([A-ZÁÀÃÉÍÓÔÕÚÇÑ0-9\\s\\.\\,\\-\\/]+)`, 'i');
     match = regex.exec(pdfText);
     if (match && match[1]) {
@@ -109,7 +89,7 @@ const extractNameNearIdentifier = (pdfText, identifier) => {
   const cleanIdentifier = String(identifier).replace(/\D/g, '');
   if (!cleanIdentifier) return null;
 
-  // Pattern 1: text before ID
+  // Padrão 1: texto antes do ID
   let regex = new RegExp(`([A-ZÁÀÃÉÍÓÔÕÚÇ0-9\s\.\-\/\&]{10,200})\\s*${cleanIdentifier}`, 'g');
   let match;
   while ((match = regex.exec(pdfText)) !== null) {
@@ -118,7 +98,7 @@ const extractNameNearIdentifier = (pdfText, identifier) => {
     if (lines.length > 0) return lines[lines.length - 1];
   }
 
-  // Pattern 2: ID at line start, text after
+  // Padrão 2: ID no início da linha, texto depois
   regex = new RegExp(`^\\s*${cleanIdentifier}\\s*[:\\-]?\\s*([A-ZÁÀÃÉÍÓÔÕÚÇ0-9\s\.\-\/\&]{10,200})$`, 'gim');
   match = regex.exec(pdfText);
   if (match && match[1]) {
@@ -126,7 +106,7 @@ const extractNameNearIdentifier = (pdfText, identifier) => {
     if (candidate.length >= 10 && candidate.length <= 200) return candidate;
   }
 
-  // Pattern 3: check lines before/after ID
+  // Padrão 3: verifica linhas antes/depois do ID
   const lines = pdfText.split(/[\r\n]+/);
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].includes(cleanIdentifier)) {
@@ -306,7 +286,7 @@ const getTipoDespesaByDescricao = async (descricao) => {
     return rows[0];
   }
   const [all] = await db.query('SELECT * FROM tipo_despesa');
-  const target = foldKey(trimmed);
+  const target = foldKey(upper);
   return all.find((row) => foldKey(row.descricao) === target) || null;
 };
 
@@ -512,7 +492,7 @@ const normalizeClassificationList = (value) => {
 };
 
 const normalizeParcelDetails = (rawParcelas, quantidadeParcelas, valorTotal, dataVencimento) => {
-  // Use AI-provided parcelas if available
+  // Usa parcelas retornadas pela IA, se disponíveis
   if (Array.isArray(rawParcelas) && rawParcelas.length > 0) {
     const items = rawParcelas.map((item, index) => {
       if (!item) return null;
@@ -529,7 +509,7 @@ const normalizeParcelDetails = (rawParcelas, quantidadeParcelas, valorTotal, dat
     if (items.length > 0) return items;
   }
 
-  // Generate parcelas if not provided
+  // Gera parcelas se não foram informadas
   const count = normalizeInt(quantidadeParcelas);
   const baseValue = Math.floor((valorTotal * 100) / count) / 100;
   let remaining = Number((valorTotal - baseValue * count).toFixed(2));
@@ -547,69 +527,6 @@ const normalizeParcelDetails = (rawParcelas, quantidadeParcelas, valorTotal, dat
   });
 };
 
-const findFirstStringValue = (value, testFn) => {
-  if (value == null) {
-    return null;
-  }
-  if (typeof value === 'string') {
-    return testFn(value) ? value : null;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const result = findFirstStringValue(item, testFn);
-      if (result) {
-        return result;
-      }
-    }
-    return null;
-  }
-  if (typeof value === 'object') {
-    for (const key of Object.keys(value)) {
-      const result = findFirstStringValue(value[key], testFn);
-      if (result) {
-        return result;
-      }
-    }
-  }
-  return null;
-};
-
-const findCnpjInParsedJson = (parsedJson) => {
-  const fornecedorRoot = parsedJson?.fornecedor;
-  const candidate = findFirstStringValue(fornecedorRoot || {}, (text) => {
-    const digits = text.replace(/\D/g, '');
-    return digits.length === 14;
-  });
-  return candidate ? candidate.replace(/\D/g, '') : null;
-};
-
-const findDocumentoInFaturadoSubtree = (parsedJson) => {
-  const faturadoRoot = parsedJson?.faturado || parsedJson?.cliente;
-  if (!faturadoRoot || typeof faturadoRoot !== 'object') {
-    return null;
-  }
-
-  const direct =
-    faturadoRoot.documento ||
-    faturadoRoot.cpf ||
-    faturadoRoot.cnpj ||
-    faturadoRoot.CPF ||
-    faturadoRoot.CNPJ;
-
-  if (direct) {
-    const digits = String(direct).replace(/\D/g, '');
-    if (digits.length === 11 || digits.length === 14) {
-      return digits;
-    }
-  }
-
-  const candidate = findFirstStringValue(faturadoRoot, (text) => {
-    const digits = text.replace(/\D/g, '');
-    return digits.length === 11 || digits.length === 14;
-  });
-  return candidate ? candidate.replace(/\D/g, '') : null;
-};
-
 const normalizeParsedData = (parsedJson, pdfText) => {
   const fornecedor = parsedJson.fornecedor || {};
   const cliente = parsedJson.faturado || parsedJson.cliente || {};
@@ -618,7 +535,7 @@ const normalizeParsedData = (parsedJson, pdfText) => {
   const cnpj = (fornecedor.cnpj || '').replace(/\D/g, '');
   const documento = (cliente.documento || cliente.cpf || cliente.cnpj || '').replace(/\D/g, '');
   
-  // Try AI extracted data first, fallback to regex
+  // Prioriza dados extraídos pela IA; usa regex como fallback
   const nomeF = fornecedor.razaoSocial || fornecedor.fantasia || 
     (cnpj && extractNameNearIdentifier(pdfText, cnpj)) ||
     extractTextValue(pdfText, ['Razão', 'Emitente']);
@@ -1019,19 +936,6 @@ const buildSearchTerms = (question) => {
   )).slice(0, 6);
 };
 
-const buildLikeQuery = (fields, terms) => {
-  if (!terms.length) {
-    return { whereClause: '', params: [] };
-  }
-
-  const searchParams = terms.map((term) => `%${term}%`);
-  const fieldCondition = fields.map((field) => `${field} LIKE ?`).join(' OR ');
-  const clause = searchParams.map(() => `(${fieldCondition})`).join(' OR ');
-  const params = searchParams.flatMap((param) => fields.map(() => param));
-
-  return { whereClause: `WHERE ${clause}`, params };
-};
-
 const formatRecords = (title, rows, fields) => {
   if (!rows || !rows.length) {
     return `${title}: nenhum registro encontrado.`;
@@ -1270,11 +1174,7 @@ const extractPdfText = async (buffer) => {
   }
 };
 
-<<<<<<< HEAD
 const generateWithOpenRouter = async (promptText, options = { jsonResponse: true }) => {
-=======
-const generateWithOpenRouter = async (promptText, retryCount = 0) => {
->>>>>>> 317ca5b3daeb347ae9f85197b2ae1831d949e86f
   if (!process.env.OPENROUTER_API_KEY) {
     const err = new Error('OPENROUTER_API_KEY not set');
     err.provider = 'openrouter';
@@ -1296,7 +1196,6 @@ const generateWithOpenRouter = async (promptText, retryCount = 0) => {
     return null;
   };
 
-<<<<<<< HEAD
   const createAttempt = (messageContent) => {
     const attempt = {
       model,
@@ -1364,52 +1263,6 @@ const generateWithOpenRouter = async (promptText, retryCount = 0) => {
 
       console.log('[OPENROUTER] OK');
       return content;
-=======
-  const attempts = [
-    { model, messages: [{ role: 'user', content: promptText }], response_format: { type: 'json_object' }, temperature: 0.1, max_tokens: 4096 },
-    { model, messages: [{ role: 'user', content: `${promptText}\n\nReturn pure valid JSON.` }], temperature: 0.1, max_tokens: 4096 },
-    { model, messages: [{ role: 'user', content: `${promptText}\n\nJSON only, no markdown.` }], temperature: 0.05, max_tokens: 4096 }
-  ];
-
-  let lastError = null;
-  for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex++) {
-    const body = attempts[attemptIndex];
-    try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
-        },
-        body: JSON.stringify(body),
-        timeout: 30000
-      });
-
-      const payload = await response.json();
-      if (!response.ok) {
-        const message = payload?.error?.message || `HTTP ${response.status}`;
-        lastError = new Error(message);
-        lastError.provider = 'openrouter';
-        lastError.status = response.status;
-        if (response.status === 429) throw lastError;
-        continue;
-      }
-
-      const content = extractContent(payload);
-      if (!content) {
-        lastError = new Error('Empty response');
-        continue;
-      }
-
-      try {
-        JSON.parse(content);
-        console.log('[OPENROUTER] OK');
-        return content;
-      } catch (jsonError) {
-        lastError = new Error(`Invalid JSON: ${jsonError.message}`);
-        continue;
-      }
->>>>>>> 317ca5b3daeb347ae9f85197b2ae1831d949e86f
     } catch (fetchError) {
       lastError = fetchError;
       continue;
@@ -1423,21 +1276,14 @@ const generateWithOpenRouter = async (promptText, retryCount = 0) => {
   throw finalError;
 };
 
-const generateWithGemini = async (promptText) => {
-  const err = new Error('Gemini disabled. Use OpenRouter');
-  err.provider = 'gemini';
-  err.status = 503;
-  throw err;
-};
-
-const repairJsonWithProvider = async (rawText, provider) => {
-  const repairPrompt = `Convert to valid JSON. Return pure JSON only, no markdown.\n${rawText}`;
+const repairJson = async (rawText) => {
+  const repairPrompt = `Converta para JSON válido. Retorne apenas JSON puro, sem markdown.\n${rawText}`;
   return generateWithOpenRouter(repairPrompt);
 };
 
 const extractDataFromPdf = async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No PDF sent' });
+    if (!req.file) return res.status(400).json({ error: 'Nenhum PDF enviado.' });
 
     console.log('[EXTRACT] Start:', { file: req.file.originalname, size: req.file.size });
 
@@ -1448,8 +1294,8 @@ const extractDataFromPdf = async (req, res) => {
     const lineCount = pdfText.split('\n').length;
     if (wordCount < 10 || lineCount < 3) {
       return res.status(400).json({ 
-        error: 'PDF content too small',
-        details: `${wordCount} words, ${lineCount} lines. PDF may be image-based`
+        error: 'Conteúdo do PDF insuficiente',
+        details: `${wordCount} palavras, ${lineCount} linhas. O PDF pode ser baseado em imagem`
       });
     }
 
@@ -1466,7 +1312,7 @@ const extractDataFromPdf = async (req, res) => {
     } catch (firstParseError) {
       console.warn('[EXTRACT] JSON invalid, repairing...');
       const candidate = extractJsonCandidate(resultText);
-      const repairedText = await repairJsonWithProvider(candidate, getProvider());
+      const repairedText = await repairJson(candidate);
       parsedJson = parseModelJson(repairedText);
       console.log('[EXTRACT] Step 4: JSON repaired');
     }
@@ -1496,7 +1342,7 @@ const extractDataFromPdf = async (req, res) => {
       });
     }
 
-    res.status(500).json({ error: 'Extraction failed', details: error?.message });
+    res.status(500).json({ error: 'Falha na extração', details: error?.message });
   }
 };
 
@@ -1506,50 +1352,50 @@ const validateParsedDataForSave = (parsedData) => {
   const faturado = parsedData?.faturado || {};
   const cliente = parsedData?.cliente || {};
   
-  // Check CNPJ format (14 digits)
+  // Valida formato do CNPJ (14 dígitos)
   const cnpj = String(fornecedor.cnpj || '').replace(/\D/g, '');
   if (cnpj.length !== 14) {
-    errors.push(`CNPJ invalid: need 14 digits, got ${cnpj.length}`);
+    errors.push(`CNPJ inválido: são necessários 14 dígitos, recebidos ${cnpj.length}`);
   }
-  
-  // Check company name (min 5 chars)
+
+  // Valida razão social (mínimo 5 caracteres)
   const razaoSocial = normalizeText(fornecedor.razaoSocial || fornecedor.razao_social || '');
   if (!razaoSocial || razaoSocial.length < 5) {
-    errors.push(`Company name too short: "${razaoSocial}"`);
+    errors.push(`Razão social muito curta: "${razaoSocial}"`);
   }
 
-  // Check document (CPF 11 or CNPJ 14)
+  // Valida documento (CPF 11 ou CNPJ 14 dígitos)
   const doc = String(faturado.documento || cliente.documento || '').replace(/\D/g, '');
   if (!(doc.length === 11 || doc.length === 14)) {
-    errors.push(`Doc invalid: need 11 or 14 digits, got ${doc.length}`);
+    errors.push(`Documento inválido: são necessários 11 ou 14 dígitos, recebidos ${doc.length}`);
   }
 
-  // Check client name (min 5 chars)
+  // Valida nome do cliente (mínimo 5 caracteres)
   const nomeCliente = normalizeText(faturado.nome || cliente.nome || '');
   if (!nomeCliente || nomeCliente.length < 5) {
-    errors.push(`Client name too short: "${nomeCliente}"`);
+    errors.push(`Nome do cliente muito curto: "${nomeCliente}"`);
   }
 
-  // Check address (min 10 chars)
+  // Valida endereço (mínimo 10 caracteres)
   const endereco = normalizeText(faturado.endereco || cliente.endereco || '');
   if (!endereco || endereco.length < 10) {
-    errors.push(`Address too short (min 10): "${endereco}"`);
+    errors.push(`Endereço muito curto (mínimo 10): "${endereco}"`);
   }
 
-  // Check value > 0
+  // Valida valor maior que zero
   const valorTotal = normalizeNumber(parsedData?.valorTotal);
   if (valorTotal <= 0) {
-    errors.push(`Value must be > 0: ${valorTotal}`);
+    errors.push(`Valor deve ser maior que zero: ${valorTotal}`);
   }
 
-  // Check issue date
+  // Valida data de emissão
   if (!toSqlDate(parsedData?.dataEmissao)) {
-    errors.push(`Invalid issue date: "${parsedData?.dataEmissao}"`);
+    errors.push(`Data de emissão inválida: "${parsedData?.dataEmissao}"`);
   }
 
-  // Check due date
+  // Valida data de vencimento
   if (!toSqlDate(parsedData?.dataVencimento)) {
-    errors.push(`Invalid due date: "${parsedData?.dataVencimento}"`);
+    errors.push(`Data de vencimento inválida: "${parsedData?.dataVencimento}"`);
   }
 
   if (errors.length > 0) console.warn('[VALIDATION] Errors:', errors);
@@ -1559,12 +1405,12 @@ const validateParsedDataForSave = (parsedData) => {
 const confirmDatabaseSave = async (req, res) => {
   try {
     const { parsedData } = req.body;
-    if (!parsedData) return res.status(400).json({ error: 'parsedData required' });
+    if (!parsedData) return res.status(400).json({ error: 'parsedData é obrigatório.' });
 
     const validation = validateParsedDataForSave(parsedData);
     if (!validation.ok) {
       return res.status(400).json({
-        error: 'Validation failed',
+        error: 'Validação falhou',
         details: validation.errors.join('; '),
         validationErrors: validation.errors
       });
